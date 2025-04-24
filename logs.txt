@@ -24,3 +24,9 @@ Im gonna use gamestate variables to train the auto labeller for high accuracy la
 
 //Starting on the auto labeller now 
 Tossing up whether to do a decison tree or a hand coded if/else linchpin
+
+Im thinking being able to identify high and low ground and currnent standing point is extremely crucial to labelling
+ill need to implment a distance to consider jumping from also, game speed may be a complication
+drawing out 3 possbile lines because subway surfers always curves left?
+
+Project has real world applications - self driving cars 
