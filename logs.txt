@@ -1,0 +1,26 @@
+hmmm wait so then cant we be greedy with our auto labeller? 
+picking only the best state in the moment? Becuase when we train our transformer 
+we give context 8 frames and we predict what needs to happen in the given moment, 
+regardless of the pass. A sucessfuly training siutation would be that we are mid air 
+but want to move right we move right, and pass the past 8 frames (in which we jumped) 
+into the transformer. So in game when a similar siutation comes up EG. 
+we jumped (seen in last 8 frames) and now where do we want to move? to the right!
+
+Establish a mechanism to label data given a single frame. Give nthe frame it will greedily pick the best region it wants 
+to be in and then return the move which best achieves this goal. Very key stage here as not 
+only labels our data but during inferemce this also makes decsions.
+
+Train a transformer on CNN encoded frames paired with the augmented data labels created by pairing video frames with
+the identification mechanism. This will allow for combos to be formed with a chain of images being the past moves
+and the transformer predicts the next move (with context) unlike our greedy labeller. 
+
+#24/04/2025
+
+//Can we train our CNN on game state variables?
+
+In inference we pass the frame into the CNN for encoding and pass those collection of frames into the transformer for prediction.
+I dont think we shoud use the autolabeller in the actual inference pipeline because transformer should learn labels off the autolabeller
+Im gonna use gamestate variables to train the auto labeller for high accuracy label generation.
+
+//Starting on the auto labeller now 
+Tossing up whether to do a decison tree or a hand coded if/else linchpin

@@ -1,8 +1,0 @@
-hmmm wait so then cant we be greedy with our auto labeller? 
-picking only the best state in the moment? Becuase when we train our transformer 
-we give context 8 frames and we predict what needs to happen in the given moment, 
-regardless of the pass. A sucessfuly training siutation would be that we are mid air 
-but want to move right we move right, and pass the past 8 frames (in which we jumped) 
-into the transformer. So in game when a similar siutation comes up EG. 
-we jumped (seen in last 8 frames) and now where do we want to move? to the right!
-
