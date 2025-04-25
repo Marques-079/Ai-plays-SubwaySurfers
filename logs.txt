@@ -30,3 +30,16 @@ ill need to implment a distance to consider jumping from also, game speed may be
 drawing out 3 possbile lines because subway surfers always curves left?
 
 Project has real world applications - self driving cars 
+
+#25/04/2025
+
+Logically it makes sense to stay on train tops as long as possbile to avoid getting blocked in (worst case we bail side)
+
+Today I made the desicion to switch to computer vision for obstacle detection - currently using roboflow to train models
+spent a few hours labelling data, plan is after this is to use this mdoel which has low accuracy and use it to label more data 
+which I will hand review (faster than me drawing on each individual image) and then ill retrain the model. 
+
+Will keep ground neon green logic as I think it may be useful for pathfinding and bail situiations. 
+Also will stick to the classic version of Subway Surfers due to plentful amounts of videos online (10+ hours at least)
+
+#26/04/2025
