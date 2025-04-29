@@ -43,3 +43,6 @@ Will keep ground neon green logic as I think it may be useful for pathfinding an
 Also will stick to the classic version of Subway Surfers due to plentful amounts of videos online (10+ hours at least)
 
 #26/04/2025
+
+Switching from LUT to Yolo11 Computer vision for higher accruacy. 
+need to make a tinder like assited data labeller, results from intital testing of 300 epochs and 400ish images were promising
