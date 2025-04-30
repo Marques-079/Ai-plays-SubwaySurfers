@@ -206,3 +206,56 @@ async def predict(
     # D) return to LS
     print("✅ Returning", len(ls_results), "labels back to LS")
     return JSONResponse({"predictions":[{"result": ls_results}]})
+
+
+
+
+
+
+
+
+
+[{
+  "data": {
+    "image": "/static/samples/sample.jpg"
+  },
+  
+  "predictions": [
+    {
+      "model_version": "one",
+      "score": 0.5,
+      "result": [
+        {
+          "original_width": 800,
+          "original_height": 450,
+          "image_rotation": 0,
+          "value": {
+            "points": [
+              [
+                20.93,
+                28.90
+              ],
+              [
+                25.86,
+                64.69
+              ],
+              [
+                38.40,
+                62.79
+              ],
+              [
+                34.13,
+                27.48
+              ]
+            ]
+          },
+          "id": "GHI",
+          "from_name": "polygon",
+          "to_name": "image",
+          "type": "polygon"
+        }
+      ]
+    }
+  ]
+}]
+
