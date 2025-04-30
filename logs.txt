@@ -46,3 +46,26 @@ Also will stick to the classic version of Subway Surfers due to plentful amounts
 
 Switching from LUT to Yolo11 Computer vision for higher accruacy. 
 need to make a tinder like assited data labeller, results from intital testing of 300 epochs and 400ish images were promising
+
+30/04/2025
+Models for CV made for Jake identification and Obstacle dtectionm
+For jake I noticed that when he jumps his hitbox moves above 25% bottom level of screen on Phone and thus we can tell
+if hes on the ground or in the air based off his hitbox location
+
+Notable our model is 88% correct this is slightly undersestiamte as during my labels I did make mistakes which the machine
+actually corrected for me, slight detrimental effect on learning unfortunately,
+
+Thinking of doing a voting system for transformer contxt, different perspective may mitgate certain detection errors
+assuming a 5% error rate (worst case) we could expect a chance of a bad vote in 16 frames to be around 10^-11 which is good
+
+Of course feeding as context windows should boost performance signifcantly in my mind
+Fine tuning is also still relvant here mabe PPO for performance boost
+
+//Median filtering: for each frame, take the majority vote of ±k neighbors.
+
+Hidden Markov Model (HMM): treat class predictions as observations and smooth with an HMM/Viterbi.
+
+Kalman filter / particle filter: for continuous states like bounding boxes or poses.
+These filters correct occasional blips by relying on past+future context, clipping stray errors.
+
+Suggestions for chat GPT, may help good to keep in mind
