@@ -14,7 +14,7 @@ These models identify obstacles and our play and thus, act as the eyes and sense
 
 A consideration here was keeping inference less than 200ms per frame. Therefore we can run updates to our model 5 times per second, slightly faster than human reaction time, except we get a much higher movement accuracy in the moment. 
 
-![image](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03%20at.jpg)
+![image](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/3a23b7775a130841fe222258e897a5677c8acd45/Images/Screenshot%202025-05-041.jpg)
 
 **PPO and Fine tuning:** To reach a 100% accuracy I plan to fine tune the transformer model (CNN frozen weights to prevent model instability)  using reinforcement learning. Ideally our pre-trained transformer is accurate enough to have long runs without mistakes! 
 
@@ -70,27 +70,20 @@ My conclusion was an algorithm which determines if he is Air or Ground based off
 
 <table>
   <tr>
-    <!-- top‑left -->
     <td>
-      <img src="Images/Screenshot%202025-05-038.jpg"
-           alt="Gameplay frame (038)" width="420"/>
+      <img src="Images/Screenshot%202025-05-038.jpg" width="420"/>
     </td>
-
-    <!-- large right‑hand image (039) -->
     <td rowspan="2">
-      <img src="Images/Screenshot%202025-05-039.jpg"
-           alt="Color‑mask debug (039)" width="460"/>
+      <img src="Images/Screenshot%202025-05-039.jpg" width="460"/>
     </td>
   </tr>
-
   <tr>
-    <!-- bottom‑left -->
     <td>
-      <img src="Images/Screenshot%202025-05-040.jpg"
-           alt="Gameplay frame (040)" width="420"/>
+      <img src="Images/Screenshot%202025-05-040.jpg" width="420"/>
     </td>
   </tr>
 </table>
+
 
 
 - Bottom left image says “Jake is on the ground” - Airtime algorithm
