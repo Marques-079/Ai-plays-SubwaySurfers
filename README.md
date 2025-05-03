@@ -17,7 +17,7 @@ These models identify obstacles and our play and thus, act as the eyes and sense
 A consideration here was keeping inference less than 200ms per frame. Therefore we can run updates to our model 5 times per second, slightly faster than human reaction time, except we get a much higher movement accuracy in the moment. 
 
 <!-- another image at 45 % of the container width -->
-<img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/3a23b775a130841fe222258e897a5677c8acd45/Images/Screenshot%202025-05-041.jpg"
+<img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/dee3a84cb4a8d705b0de6bb666cd7cf2bf6880ea/Images/Screenshot%202025-05-041.jpg"
      width="45%"  alt="image"/>
 
 **PPO and Fine tuning:** To reach a 100% accuracy I plan to fine tune the transformer model (CNN frozen weights to prevent model instability)  using reinforcement learning. Ideally our pre-trained transformer is accurate enough to have long runs without mistakes! 
@@ -63,20 +63,37 @@ Hand cramps were real…
 
 Using Roboflows build in UI fine tuning these open source models was drastically sped up (Thanks roboflow!). Through a bit of experimentation, early stopping and late nights here were the performance of my two models - the mAP@50 scores are a bit lower than what the actual model detects due to me making a few mistakes in data labelling. In the end I used around 10000 labelled images to fine tune - this number is post augmentation. For obstacles I used horizontal mirroring and varied zoom 0% → 18% and for Jake I used image rescaling and horizontal mirror.
 
-
-<p align="center">
-  <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-032.jpg"
-       width="40%" alt="Pixel‑palette rail mask"/>
-
-  <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-033.jpg" 
-       width="40%" alt="3D‑LUT recoloured frame"/>
-</p>
+<table>
+  <tr>
+    <td width="50%">
+      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-032.jpg"
+           alt="Pixel‑palette rail mask"
+           style="width:100%;"/>
+    </td>
+    <td width="50%">
+      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-033.jpg"
+           alt="3D‑LUT recoloured frame"
+           style="width:100%;"/>
+    </td>
+  </tr>
+</table>
 
 - Images from Roboflow’s dashboard
 
-![Screenshot 2025-05-03 at 10.08.51 PM.png](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-036.jpg)
-
-![Screenshot 2025-05-03 at 10.08.36 PM.png](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-037.jpg)
+<table>
+  <tr>
+    <td width="50%">
+      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-036.jpg"
+           alt="Pixel‑palette rail mask"
+           style="width:100%;"/>
+    </td>
+    <td width="50%">
+      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-037.jpg"
+           alt="3D‑LUT recoloured frame"
+           style="width:100%;"/>
+    </td>
+  </tr>
+</table>
 
 Computer vision - Mk1 at work 
 
