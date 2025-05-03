@@ -8,7 +8,7 @@ After being inspired by Youtubers making “AI beats…” content I figured why
 
 These models identify obstacles and our play and thus, act as the eyes and senses to our AI. We label using a handwritten script which uses the collected obstacles to plot the greedy best path to take in the frame’s instance. This way we can autolabel thousands of frames relatively quickly (faster than me sitting there all day)
 
-![ezgif.com-video-to-gif-converter.gif](Subway%20Surfers%20vs%20AI%20%F0%9F%9A%83%20%F0%9F%9A%83%F0%9F%8F%83%E2%80%8D%E2%99%82%EF%B8%8F%20(%F0%9F%9A%A7)%201e8f8928b50a8029b528df140995e489/ezgif.com-video-to-gif-converter.gif)
+![gif1](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/0252f155d419a04316b345626528c01b88975811/Images/Movie3.mp4)
 
 **Dual models :**  I run real time analysis on our gameplay using a screen overlay, essentially while this runs I have a Convolutional Neural Network (CNN) which acts as an encoder for our transformer model. To train we use our 1 million+ frames (run through CNN) and then passed to our transformer. The goal here is to establish a baseline adaptable model that not only uses context of 16 frames but also can string together combos (greedy could not). 
 
