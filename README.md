@@ -10,7 +10,7 @@ These models identify obstacles and our play and thus, act as the eyes and sense
 
 <!-- 400‑pixel‑wide thumbnail -->
 <img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03.jpg"
-     width="600"  alt="gif1"/>
+     width="400"  alt="gif1"/>
 
 **Dual models :**  I run real time analysis on our gameplay using a screen overlay, essentially while this runs I have a Convolutional Neural Network (CNN) which acts as an encoder for our transformer model. To train we use our 1 million+ frames (run through CNN) and then passed to our transformer. The goal here is to establish a baseline adaptable model that not only uses context of 16 frames but also can string together combos (greedy could not). 
 
@@ -18,7 +18,7 @@ A consideration here was keeping inference less than 200ms per frame. Therefore 
 
 <!-- another image at 45 % of the container width -->
 <img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/3a23b775a130841fe222258e897a5677c8acd45/Images/Screenshot%202025-05-041.jpg"
-     width="50%"  alt="image"/>
+     width="45%"  alt="image"/>
 
 **PPO and Fine tuning:** To reach a 100% accuracy I plan to fine tune the transformer model (CNN frozen weights to prevent model instability)  using reinforcement learning. Ideally our pre-trained transformer is accurate enough to have long runs without mistakes! 
 
@@ -46,7 +46,11 @@ I was soon quick to realise that this would not work at all, fine details were m
 
 And thus came the merticlous task of labelling data for the computer vision model to train on. I spent around 5 hours labelling for the 2 models, but it was worth it in the end!
 
-![ezgif.com-video-to-gif-converter (1).gif](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03%20at.jpg)
+
+<img src="ttps://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03%20at.jpg" 
+     width="45%" alt="3D‑LUT recoloured frame"/>
+
+
 
 
 Hand cramps were real… 
@@ -55,9 +59,14 @@ Hand cramps were real…
 
 Using Roboflows build in UI fine tuning these open source models was drastically sped up (Thanks roboflow!). Through a bit of experimentation, early stopping and late nights here were the performance of my two models - the mAP@50 scores are a bit lower than what the actual model detects due to me making a few mistakes in data labelling. In the end I used around 10000 labelled images to fine tune - this number is post augmentation. For obstacles I used horizontal mirroring and varied zoom 0% → 18% and for Jake I used image rescaling and horizontal mirror.
 
-![Screenshot 2025-05-03 at 10.03.41 PM.png](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-032.jpg)
 
-![Screenshot 2025-05-03 at 10.04.47 PM.png](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-033.jpg)
+<p align="center">
+  <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-032.jpg"
+       width="45%" alt="Pixel‑palette rail mask"/>
+
+  <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-033.jpg" 
+       width="45%" alt="3D‑LUT recoloured frame"/>
+</p>
 
 - Images from Roboflow’s dashboard
 
