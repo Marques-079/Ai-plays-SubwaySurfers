@@ -25,6 +25,7 @@ A consideration here was keeping inference less than 200ms per frame. Therefore 
 **PPO and Fine tuning:** To reach a 100% accuracy I plan to fine tune the transformer model (CNN frozen weights to prevent model instability)  using reinforcement learning. Ideally our pre-trained transformer is accurate enough to have long runs without mistakes! 
 
 <br>
+
 ---
 <br>
 
@@ -52,6 +53,7 @@ My first thought was to quantise the image into smaller pixels and through this 
 Initial thoughts on how we could detect obstacles. 
 
 <br>
+
 ---
 <br>
 
@@ -127,6 +129,7 @@ Computer vision - Mk1 at work
 The decision to use this method instead of hand labelling was driven by the fact that there is many hours of subway surfers footage online in version 1.0, instead of playing I can just take screenshots from those videos and run analysis on them - skill is not so much of an issue as we are looking for scenarios rather than excellent gameplay (another benefit of this approach)
 
 <br>
+
 ---
 <br>
 
@@ -158,7 +161,10 @@ My conclusion was an algorithm which determines if he is Air or Ground based off
 
 Valid ground pathing is found by combining matching colours within the identified mask for rails this prevents colours that match rails, but aren’t rails to being identified. The downside is that if our algorithm fails then we will be running blind. This reliance could be a bad thing. 
 
+<br>
+
 ---
+<br>
 
 # CNN and Transformer training 🚗🔄🤖
 
