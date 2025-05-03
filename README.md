@@ -28,14 +28,21 @@ A consideration here was keeping inference less than 200ms per frame. Therefore 
 
 My first thought was to quantise the image into smaller pixels and through this I could run a model to detect obstacles based on colour, little did I know at the time this would be a HUGE under estimation of the task at hand
 
-<!-- two thumbnails side‑by‑side -->
-<p align="center">
-  <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/31d319bc0a0c6f48d1f8a93a5de47754fbc022c4/Images/Screenshot121212.png" 
-       width="45%" alt="Pixel‑palette rail mask"/>
+<table>
+  <tr>
+    <td width="50%">
+      <img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/31d319bc0a0c6f48d1f8a93a5de47754fbc022c4/Images/Screenshot121212.png"
+           alt="Pixel‑palette rail mask"
+           style="width:100%;"/>
+    </td>
+    <td width="50%">
+      <img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/7f3f07a7a62fa7c48c1a61735864e986e409dcff/Images/Screenshot%202025-05-034.jpg"
+           alt="3D‑LUT recoloured frame"
+           style="width:100%;"/>
+    </td>
+  </tr>
+</table>
 
-  <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/7f3f07a7a62fa7c48c1a61735864e986e409dcff/Images/Screenshot%202025-05-034.jpg" 
-       width="45%" alt="3D‑LUT recoloured frame"/>
-</p>
 
 
 Initial thoughts on how we could detect obstacles. 
