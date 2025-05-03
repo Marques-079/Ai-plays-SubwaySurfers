@@ -8,13 +8,17 @@ After being inspired by Youtubers making “AI beats…” content I figured why
 
 These models identify obstacles and our play and thus, act as the eyes and senses to our AI. We label using a handwritten script which uses the collected obstacles to plot the greedy best path to take in the frame’s instance. This way we can autolabel thousands of frames relatively quickly (faster than me sitting there all day)
 
-![gif1](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03.jpg)
+<!-- 400‑pixel‑wide thumbnail -->
+<img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03.jpg"
+     width="600"  alt="gif1"/>
 
 **Dual models :**  I run real time analysis on our gameplay using a screen overlay, essentially while this runs I have a Convolutional Neural Network (CNN) which acts as an encoder for our transformer model. To train we use our 1 million+ frames (run through CNN) and then passed to our transformer. The goal here is to establish a baseline adaptable model that not only uses context of 16 frames but also can string together combos (greedy could not). 
 
 A consideration here was keeping inference less than 200ms per frame. Therefore we can run updates to our model 5 times per second, slightly faster than human reaction time, except we get a much higher movement accuracy in the moment. 
 
-![image](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/3a23b7775a130841fe222258e897a5677c8acd45/Images/Screenshot%202025-05-041.jpg)
+<!-- another image at 45 % of the container width -->
+<img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/3a23b775a130841fe222258e897a5677c8acd45/Images/Screenshot%202025-05-041.jpg"
+     width="50%"  alt="image"/>
 
 **PPO and Fine tuning:** To reach a 100% accuracy I plan to fine tune the transformer model (CNN frozen weights to prevent model instability)  using reinforcement learning. Ideally our pre-trained transformer is accurate enough to have long runs without mistakes! 
 
@@ -24,9 +28,15 @@ A consideration here was keeping inference less than 200ms per frame. Therefore 
 
 My first thought was to quantise the image into smaller pixels and through this I could run a model to detect obstacles based on colour, little did I know at the time this would be a HUGE under estimation of the task at hand
 
-![Screenshot 2025-04-25 at 12.00.38 AM.png](Subway%20Surfers%20vs%20AI%20%F0%9F%9A%83%20%F0%9F%9A%83%F0%9F%8F%83%E2%80%8D%E2%99%82%EF%B8%8F%20(%F0%9F%9A%A7)%201e8f8928b50a8029b528df140995e489/f542a73a-5bdd-44a7-b608-57991c6beb5e.png)
+<!-- two thumbnails side‑by‑side -->
+<p align="center">
+  <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/31d319bc0a0c6f48d1f8a93a5de47754fbc022c4/Images/Screenshot121212.png" 
+       width="45%" alt="Pixel‑palette rail mask"/>
 
-![Screenshot 2025-05-03 at 10.06.07 PM.png](Subway%20Surfers%20vs%20AI%20%F0%9F%9A%83%20%F0%9F%9A%83%F0%9F%8F%83%E2%80%8D%E2%99%82%EF%B8%8F%20(%F0%9F%9A%A7)%201e8f8928b50a8029b528df140995e489/Screenshot_2025-05-03_at_10.06.07_PM.png)
+  <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/7f3f07a7a62fa7c48c1a61735864e986e409dcff/Images/Screenshot%202025-05-034.jpg" 
+       width="45%" alt="3D‑LUT recoloured frame"/>
+</p>
+
 
 Initial thoughts on how we could detect obstacles. 
 
@@ -37,6 +47,7 @@ I was soon quick to realise that this would not work at all, fine details were m
 And thus came the merticlous task of labelling data for the computer vision model to train on. I spent around 5 hours labelling for the 2 models, but it was worth it in the end!
 
 ![ezgif.com-video-to-gif-converter (1).gif](https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03%20at.jpg)
+
 
 Hand cramps were real… 
 
