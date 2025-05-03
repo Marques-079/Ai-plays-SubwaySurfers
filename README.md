@@ -8,17 +8,19 @@ After being inspired by Youtubers making “AI beats…” content I figured why
 
 These models identify obstacles and our play and thus, act as the eyes and senses to our AI. We label using a handwritten script which uses the collected obstacles to plot the greedy best path to take in the frame’s instance. This way we can autolabel thousands of frames relatively quickly (faster than me sitting there all day)
 
-<!-- 400‑pixel‑wide thumbnail -->
-<img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03.jpg"
-     width="400"  alt="gif1"/>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03.jpg"
+       width="500"  alt="gif1">
+</p>
 
 **Dual models :**  I run real time analysis on our gameplay using a screen overlay, essentially while this runs I have a Convolutional Neural Network (CNN) which acts as an encoder for our transformer model. To train we use our 1 million+ frames (run through CNN) and then passed to our transformer. The goal here is to establish a baseline adaptable model that not only uses context of 16 frames but also can string together combos (greedy could not). 
 
 A consideration here was keeping inference less than 200ms per frame. Therefore we can run updates to our model 5 times per second, slightly faster than human reaction time, except we get a much higher movement accuracy in the moment. 
 
-<!-- another image at 45 % of the container width -->
-<img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/dee3a84cb4a8d705b0de6bb666cd7cf2bf6880ea/Images/Screenshot%202025-05-041.jpg"
-     width="45%"  alt="image"/>
+<p align="center">
+  <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/dee3a84cb4a8d705b0de6bb666cd7cf2bf6880ea/Images/Screenshot%202025-05-041.jpg"
+       width="45%"  alt="gif1">
+</p>
 
 **PPO and Fine tuning:** To reach a 100% accuracy I plan to fine tune the transformer model (CNN frozen weights to prevent model instability)  using reinforcement learning. Ideally our pre-trained transformer is accurate enough to have long runs without mistakes! 
 
