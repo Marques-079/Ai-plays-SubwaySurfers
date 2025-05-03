@@ -68,26 +68,30 @@ Now comes arguably the hardest part of this process, making an auto labeller whi
 
 My conclusion was an algorithm which determines if he is Air or Ground based off height, this can be paired with a standing on algorithm to yield accurate results. When working on rails we would also have to be able to identify possible moves. How the greedy algorithm works for game state: ground is that it tracks forward the rails it has identified, and then attempts to move into the one with the highest longevity (ignore no kill obstacles eg.  low barriers). 
 
-<p align="center">
-  <img src="Images/Screenshot 2025-05-038.jpg" width="45%" />
-  <img src="Images/Screenshot 2025-05-040.jpg" width="45%" />
-  <br><sub>📸 In‑game frame &nbsp;&nbsp;&nbsp; | &nbsp;&nbsp;&nbsp; 🖼️ Vision pipeline output</sub>
-</p>
+<table>
+  <tr>
+    <!-- top‑left -->
+    <td>
+      <img src="Images/Screenshot%202025-05-038.jpg"
+           alt="Gameplay frame (038)" width="420"/>
+    </td>
 
-## Pipeline Overview
-1. **Frame capture** → YOLOv11 segmentation  
-2. **Color‑mask filtering** → binary rail mask  
-3. **CNN + Transformer inference** → next move  
-4. **PPO fine‑tuning** → long‑term reward optimisation  
+    <!-- large right‑hand image (039) -->
+    <td rowspan="2">
+      <img src="Images/Screenshot%202025-05-039.jpg"
+           alt="Color‑mask debug (039)" width="460"/>
+    </td>
+  </tr>
 
-<details>
-<summary>🔍 Debug visualisations (click to expand)</summary>
+  <tr>
+    <!-- bottom‑left -->
+    <td>
+      <img src="Images/Screenshot%202025-05-040.jpg"
+           alt="Gameplay frame (040)" width="420"/>
+    </td>
+  </tr>
+</table>
 
-| Color Match Mask | Filtered Combined Mask |
-|:--:|:--:|
-| <img src="Images/Screenshot 2025-05-039.jpg" width="90%" /> | <img src="Images/Screenshot 2025-05-040.jpg" width="90%" /> |
-
-</details>
 
 - Bottom left image says “Jake is on the ground” - Airtime algorithm
 
