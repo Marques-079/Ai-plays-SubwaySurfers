@@ -47,11 +47,8 @@ I was soon quick to realise that this would not work at all, fine details were m
 And thus came the merticlous task of labelling data for the computer vision model to train on. I spent around 5 hours labelling for the 2 models, but it was worth it in the end!
 
 
-<img src="ttps://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03%20at.jpg" 
+<img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03%20at.jpg" 
      width="45%" alt="3D‑LUT recoloured frame"/>
-
-
-
 
 Hand cramps were real… 
 
@@ -62,10 +59,10 @@ Using Roboflows build in UI fine tuning these open source models was drastically
 
 <p align="center">
   <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-032.jpg"
-       width="45%" alt="Pixel‑palette rail mask"/>
+       width="40%" alt="Pixel‑palette rail mask"/>
 
   <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/a733c5387799bebe6849329cc0c3ab3a24b0dd42/Images/Screenshot%202025-05-033.jpg" 
-       width="45%" alt="3D‑LUT recoloured frame"/>
+       width="40%" alt="3D‑LUT recoloured frame"/>
 </p>
 
 - Images from Roboflow’s dashboard
