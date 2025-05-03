@@ -58,18 +58,20 @@ And thus came the merticlous task of labelling data for the computer vision mode
 
 <table>
   <tr>
-    <td width="50%">
-      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03%20at.jpg"
-           alt="Pixel‑palette rail mask"
-           style="width:100%;"/>
+    <td>
+      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/raw/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03%20at.jpg" width="420"/>
     </td>
-    <td width="50%">
-      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/cdeb34fdc1248284687e4e1af8f4985e3d17fa77/Images/inclasssubwaysurfers.jpg"
-           alt="3D‑LUT recoloured frame"
-           style="width:100%;"/>
+    <td rowspan="2">
+      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/cdeb34fdc1248284687e4e1af8f4985e3d17fa77/Images/inclasssubwaysurfers.jpg" width="460"/>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/4cdecb4ba31c35b715c30faf47c2d0fe80205bce/Images/Screenshot%20Masks11.png" width="420"/>
     </td>
   </tr>
 </table>
+
 
 Hand cramps were real… 
 
