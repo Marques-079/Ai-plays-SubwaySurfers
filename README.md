@@ -75,9 +75,13 @@ And thus came the merticlous task of labelling data for the computer vision mode
 
 Hand cramps were real… 
 
+The reason why this took to much time is because a model can only predict as well as the data that trained it, any mistakes I made (especially repetatively) would throw off the model's predictive ability by a large amount - so it was key here to fine-tune it on highly accurate data. 
+
+<br>
+
 ---
 
-Using Roboflows build in UI fine tuning these open source models was drastically sped up (Thanks roboflow!). Through a bit of experimentation, early stopping and late nights here were the performance of my two models - the mAP@50 scores are a bit lower than what the actual model detects due to me making a few mistakes in data labelling. In the end I used around 10000 labelled images to fine tune - this number is post augmentation. For obstacles I used horizontal mirroring and varied zoom 0% → 18% and for Jake I used image rescaling and horizontal mirror.
+Using Roboflow's built in user interface made fine tuning these open source models was drastically sped up (Thanks roboflow!). Through a bit of experimentation, early stopping and late nights here were the performance of my two models - the mAP@50 scores are a bit lower than what the actual model detects due to me making a few mistakes in data labelling. In the end I used around 10000 labelled images to fine tune - this number is post augmentation. For obstacles I used horizontal mirroring and varied zoom 0% → 18% and for Jake I used image rescaling and horizontal mirror.
 
 <table>
   <tr>
