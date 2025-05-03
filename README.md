@@ -24,7 +24,9 @@ A consideration here was keeping inference less than 200ms per frame. Therefore 
 
 **PPO and Fine tuning:** To reach a 100% accuracy I plan to fine tune the transformer model (CNN frozen weights to prevent model instability)  using reinforcement learning. Ideally our pre-trained transformer is accurate enough to have long runs without mistakes! 
 
+<br>
 ---
+<br>
 
 ## Step 1  - Computer Vision and ground detection 👀
 
@@ -49,7 +51,9 @@ My first thought was to quantise the image into smaller pixels and through this 
 
 Initial thoughts on how we could detect obstacles. 
 
+<br>
 ---
+<br>
 
 I was soon quick to realise that this would not work at all, fine details were missed and there was too much variance in the consistent game obstacles due to warping and different perspectives. Clearly I needed something smarter which is how I arrived at a computer vision modes, one to detect Jake (the runner) and one to detect obstacles in the image. 
 
@@ -80,6 +84,7 @@ The reason why this took to much time is because a model can only predict as wel
 <br>
 
 ---
+<br>
 
 Using Roboflow's built in user interface made fine tuning these open source models was drastically sped up (Thanks roboflow!). Through a bit of experimentation, early stopping and late nights here were the performance of my two models - the mAP@50 scores are a bit lower than what the actual model detects due to me making a few mistakes in data labelling. In the end I used around 10000 labelled images to fine tune - this number is post augmentation. For obstacles I used horizontal mirroring and varied zoom 0% → 18% and for Jake I used image rescaling and horizontal mirror.
 
@@ -121,7 +126,9 @@ Computer vision - Mk1 at work
 
 The decision to use this method instead of hand labelling was driven by the fact that there is many hours of subway surfers footage online in version 1.0, instead of playing I can just take screenshots from those videos and run analysis on them - skill is not so much of an issue as we are looking for scenarios rather than excellent gameplay (another benefit of this approach)
 
+<br>
 ---
+<br>
 
 # The greedy algorithm  👹
 
