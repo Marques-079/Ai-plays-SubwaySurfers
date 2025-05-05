@@ -1,6 +1,6 @@
 hmmm wait so then cant we be greedy with our auto labeller? 
 picking only the best state in the moment? Becuase when we train our transformer 
-we give context 8 frames and we predict what needs to happen in the given moment, 
+we give context 16ish frames and we predict what needs to happen in the given moment, 
 regardless of the pass. A sucessfuly training siutation would be that we are mid air 
 but want to move right we move right, and pass the past 8 frames (in which we jumped) 
 into the transformer. So in game when a similar siutation comes up EG. 
@@ -69,3 +69,41 @@ Kalman filter / particle filter: for continuous states like bounding boxes or po
 These filters correct occasional blips by relying on past+future context, clipping stray errors.
 
 Suggestions for chat GPT, may help good to keep in mind
+
+//1. Build a discrete state–action model
+States
+Each frame, represent the player by:
+
+Current lane (0/1/2)
+
+Vertical phase: on ground, in jump arc (and how many frames into it)
+
+Actions
+Five discrete moves: stay, left, right, jump, duck.
+
+Dynamics
+You know exactly how jump evolves (parabolic arc over N frames) and how obstacles scroll (constant pixels/frame).
+
+
+Could be an interesting concept too. Predicting the future and acting accordingly?
+OR we use transformer + PPO fine tuning <- stick with this I think
+
+
+3/5/25
+
+Data imbalance is a real issue here, transofmer cannot learn on a 10:90 split of data
+
+To be honest maybe I can hard code the solution so how do we expand our horizons
+My thoughts on what we can do - 
+
+Be 100% honest. My cv models can only identify v1.0 ibjects of the game - 
+it would be cool for it to be able to do all objects in everygame version. 
+Objects come in similar shapes but varying colours and textures. Objects behave the identical version to version. 
+Would it be possible to train transformer on my hardcoded model then take the trasnformer and slowly implment different 
+framing and blocks from diffferent versions to help its generlaisation. Thus after many many versions it can play any 
+subwaysurfers game from any version?
+
+
+Given that when we test a new version of Subway surfers the textures change, doesnt that mean we have to retrain the Vision transformer and also vision transformer how do we even train. Frames + movement labels? But how does that help the ViT to encode for the actual transformer we go from scratch
+
+is there a better way to approach this?
