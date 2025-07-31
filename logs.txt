@@ -107,3 +107,6 @@ subwaysurfers game from any version?
 Given that when we test a new version of Subway surfers the textures change, doesnt that mean we have to retrain the Vision transformer and also vision transformer how do we even train. Frames + movement labels? But how does that help the ViT to encode for the actual transformer we go from scratch
 
 is there a better way to approach this?
+
+1/8/25
+Back at the project 3 months later, spent the day refactoring the code base and transfering files over from local to VS code
