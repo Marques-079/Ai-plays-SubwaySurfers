@@ -110,3 +110,27 @@ is there a better way to approach this?
 
 1/8/25
 Back at the project 3 months later, spent the day refactoring the code base and transfering files over from local to VS code
+
+2/8/25
+Trying to get the emulator working
+
+docker run --privileged -d \
+  --name android-emu \
+  -p 6080:6080 \      
+  -p 5555:5555 \      
+  -e DEVICE="Nexus 5" \
+  -e ANDROID_VERSION=9.0 \
+  budtmo/docker-android-x86-9.0
+
+open http://localhost:6080
+
+docker cp ~/Downloads/1359788067_Subway_Surf_ARMv7.apk android-emu:/tmp/app.apk
+docker exec android-emu adb install -r /tmp/app.apk
+
+3/8/25
+Still trying to get the emulator, VMS, Andrio studio, Device farms.
+All incompatoible due to M1s inability to run a 32arm setup, the game we need is Subway Surfers 1.0 which only comes in 32arm (2012)
+
+Solution: Was to use Parsec to mirror over an old laptop to my mac with shared keystrokes. 
+Optimal settings: Full screen, 1280x720 or 1280 for full length lower latency
+
