@@ -63,8 +63,9 @@ time.sleep(0.5)
 pyautogui.click(1030, 890)   
 
 prev_ts = time.time()
-frame_save = True  
+frame_save = False  
 
+# Main Logic loop here
 while running:
     pyautogui.press('up')
 
