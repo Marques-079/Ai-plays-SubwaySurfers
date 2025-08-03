@@ -134,3 +134,8 @@ All incompatoible due to M1s inability to run a 32arm setup, the game we need is
 Solution: Was to use Parsec to mirror over an old laptop to my mac with shared keystrokes. 
 Optimal settings: Full screen, 1280x720 or 1280x800 for full length lower latency
 
+4/8/25
+Got keystrokes working with mirror and the screnshot pipeline optimised to sub 150ms passes between the screen and our processor code
+Got inference down to less than 50ms for a full shot which is extremely good 
+Will need to improve rail detection and maybe use a curr lane state to know where i can move
+
