@@ -132,5 +132,5 @@ Still trying to get the emulator, VMS, Andrio studio, Device farms.
 All incompatoible due to M1s inability to run a 32arm setup, the game we need is Subway Surfers 1.0 which only comes in 32arm (2012)
 
 Solution: Was to use Parsec to mirror over an old laptop to my mac with shared keystrokes. 
-Optimal settings: Full screen, 1280x720 or 1280 for full length lower latency
+Optimal settings: Full screen, 1280x720 or 1280x800 for full length lower latency
 
