@@ -139,3 +139,8 @@ Got keystrokes working with mirror and the screnshot pipeline optimised to sub 1
 Got inference down to less than 50ms for a full shot which is extremely good 
 Will need to improve rail detection and maybe use a curr lane state to know where i can move
 
+12:00pm
+Is there something I can do to pick up these generaly rectangular squares between rails, 
+then all I do is draw an arrow inside the square and get a vector to point to the next square forward, if it find another square then we continue, 
+if it finds an obstacle then we can halt search.
+
