@@ -144,3 +144,13 @@ Is there something I can do to pick up these generaly rectangular squares betwee
 then all I do is draw an arrow inside the square and get a vector to point to the next square forward, if it find another square then we continue, 
 if it finds an obstacle then we can halt search.
 
+5/8/25
+Spent the day optimising for speed, in the end got TRUE inference and post processing down to around 150-175ms per frame,
+need wiggle room for the above ground logic -> TBF we only need to run one at once. 
+All code under bruh_another_rails4.ipynb
+
+6/8/25
+Skipped
+
+7/8/25
+
