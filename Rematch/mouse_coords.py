@@ -10,3 +10,11 @@ try:
         time.sleep(0.1)
 except KeyboardInterrupt:
     print("\nDone.")
+
+
+'''
+(800, 720) left lane
+890, 720) middle lane
+980, 720    right lane
+
+'''

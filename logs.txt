@@ -153,4 +153,29 @@ All code under bruh_another_rails4.ipynb
 Skipped
 
 7/8/25
+Assignments
+
+8/8/25
+Assignments
+
+9/8/25
+We can know our lane by keeping underlying state, We also know coords where the base of the heatmap of any detectable lanes would be present.
+We can look at the heatmap 'jake' is currently in (using lane + preset heatmap start coords) -> To find which arrow is relevant to jake
+ofc if we are lane 0 (leftmost) and an arrow is to the left then ignore. 
+
+Try to stay optimal line aka clear path for as long as possible
+If blocked then enter bail mode, scans for any rails on right if clear then move -> if avaliable but not clear but proximity alert then override
+Check arrow right -> check rails block on right on coords + offset for transition? -> If clear: then can move
+
+'''
+As you can see here the purple triangles allow me to plot onto lanes, when a triangle is sitting under an object it gets pushed down by the obstacle this way we can simply look to the mask where the arrow points (above the arow) to locate the given obstacle, based off this we can choose optimal lanes to be in. 
+
+How? We know Jakes lane because we can remeber what keys weve pressed, we also utilise a heatmap (seen in code above) which shows roughly a given rail. Combine this info the find which heatmapped/rail jake is on and we can use this to find if we are in a good lane or not. Then we can look at triangls positined left and right of our main jake-rail-triangle to find if other lanes are clear. 
+
+The reason I need to tdo this is sometims triangles may appear on the side as misreading and this we need to know the triangle relevant to our lane so we can ignore others more left (if we are leftmost lane). Get what I mean? Explain it back to me so we are clear on how this should work.
+
+Movement logic is the following.
+Try to stay optimal line aka clear path for as long as possible
+Check arrow right -> check rails blocked ahead or not. If so check other valid triangles lanes -> If mask there is rails aka space we can move into them move.
+'''
 
