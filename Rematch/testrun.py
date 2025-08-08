@@ -99,7 +99,7 @@ while running:
     #pyautogui.press('up')
 
     #Cropped version (642,136,508,845)
-    time.sleep(1)
+    time.sleep(0.2)
     frame = capture_frame(snap_coords, save=frame_save)
 
     now = time.time()
