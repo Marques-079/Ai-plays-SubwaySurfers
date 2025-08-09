@@ -179,3 +179,10 @@ Try to stay optimal line aka clear path for as long as possible
 Check arrow right -> check rails blocked ahead or not. If so check other valid triangles lanes -> If mask there is rails aka space we can move into them move.
 '''
 
+When plotting the vector which matches degrees the closest for a given lane will be jake's 
+'''
+(800, 720) left lane : 10.7 degrees  
+(890, 720) middle lane : 1.5 degrees
+(980, 720) right lane : -15.0 degrees
+'''
+

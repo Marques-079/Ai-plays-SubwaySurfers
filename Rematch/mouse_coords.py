@@ -13,8 +13,8 @@ except KeyboardInterrupt:
 
 
 '''
-(800, 720) left lane
-890, 720) middle lane
-980, 720    right lane
-
+(800, 720) left lane : -10.7 degrees  
+(890, 720) middle lane : 1.5 degrees
+(980, 720) right lane : 15.0 degrees
 '''
+
