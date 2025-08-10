@@ -186,3 +186,21 @@ When plotting the vector which matches degrees the closest for a given lane will
 (980, 720) right lane : -15.0 degrees
 '''
 
+10/8/25
+Finalised lanes, and corresponding arrows/obstacle detection 
+Planning logic for ground movement:
+ - If in greenlane then stay in greenlane 
+ - <Prioritise moving up ramps?> 
+ - Avoid being in redlanes -> If in redlane and proximity limit triggered look for any escape and execute 
+ - For yellow indicators -> Jump when N pixels out from object and trigger down after 0.5 secs (minimise airtime) + Ignore all signals while in air
+ - If switching lanes then run a check there is not an obstacle which hasnt moved out of view yet 
+ - Ignore any vectors which arent between +/- 45
+ - Always roll under High and Low barriers v1s, Jump over Low Barriers 2
+
+ - Need a ramp state -> Can blip scan on hardcoded point for Jake's lane and have a trigger switch for consecutive ramp readings -> We know dismount because
+ jumping between trains we discard scanning. If blip touches ground consecutive and != airtime then regrounded 
+ - Isolate 3D plane into a unwarped 2D birdseye plane to find optimal 
+
+
+ 
+

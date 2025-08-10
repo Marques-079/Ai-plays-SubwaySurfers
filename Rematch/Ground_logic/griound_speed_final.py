@@ -1,76 +1,23 @@
 #!/usr/bin/env python3
-# Live capture + ultra-fast single-image pipeline (no batching)
-# ESC to stop. Captures a cropped region, processes each frame immediately, prints per-frame timings.
+# Ultra-fast, lean pipeline with lane-aware curved sampling + ray-walk probes
+# • Accepts a single image path (fast single-run) OR loops your frames dir for benchmarking
+# • Prints per-frame timings; no overlay drawing or file I/O.
 
-import os, time, math, subprocess
-import cv2, numpy as np
-from mss import mss
-import pyautogui
-from pynput import keyboard
-import torch
-from ultralytics import YOLO
+import os, sys, glob, time, math
+import cv2, torch, numpy as np
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from ultralytics import YOLO
+import sys
 
-# Lane state
-lane = 1
-MIN_LANE = 0
-MAX_LANE = 2
-running = True
-
-def on_press(key):
-    """Single handler: arrow keys change lanes; ESC stops."""
-    global lane, running
-    try:
-        if key == keyboard.Key.left:
-            lane = max(MIN_LANE, lane - 1)
-            print(f"Moved Left → Lane {lane}")
-        elif key == keyboard.Key.right:
-            lane = min(MAX_LANE, lane + 1)
-            print(f"Moved Right → Lane {lane}")
-        elif key == keyboard.Key.esc:
-            print("ESC pressed — exiting")
-            running = False
-            return False
-    except Exception as e:
-        print(f"Error: {e}")
+all_proc_times: list[float] = []
 
 # =======================
-# Capture / UI bootstrap
-# =======================
-# Start the keyboard listener once
-listener = keyboard.Listener(on_press=on_press)
-listener.start()
-
-# Parsec to front (macOS)
-try:
-    subprocess.run(["osascript", "-e", 'tell application "Parsec" to activate'], check=False)
-    time.sleep(0.4)
-except Exception:
-    pass
-
-# Choose crop + click based on ad layout
-advertisement = True
-if advertisement:
-    snap_coords = (644, 77, (1149-644), (981-75))  # (left, top, width, height)
-    start_click = (1030, 900)
-else:
-    snap_coords = (483, 75, (988-483), (981-75))
-    start_click = (870, 895)
-
-# Click "Start"
-try:
-    pyautogui.click(start_click)
-except Exception:
-    pass
-
-# Initialize capture
-sct = mss()
-
-# =======================
-# Model / Pipeline config
+# Config
 # =======================
 home       = os.path.expanduser("~")
 weights    = f"{home}/models/jakes-loped/jakes-finder-mk1/1/weights.pt"
+frames_dir = Path(home) / "Documents" / "GitHub" / "Ai-plays-SubwaySurfers" / "frames"
 
 RAIL_ID    = 9
 IMG_SIZE   = 512
@@ -93,30 +40,40 @@ MIN_DARK_FRACTION   = 0.15
 
 # Sampling ray
 SAMPLE_UP_PX        = 180
-RAY_STEP_PX         = 20  # probe step
+RAY_STEP_PX         = 20       # walk the probe every 20 px
 
-# Jake lane points + bearing targets
-LANE_LEFT   = (300, 1340)
-LANE_MID    = (490, 1340)
-LANE_RIGHT  = (680, 1340)
-LANE_POINTS = (LANE_LEFT, LANE_MID, LANE_RIGHT)  # index by lane (0/1/2)
-
-LANE_TARGET_DEG = {"left": -10.7, "mid": +1.5, "right": +15.0}
-
-# Bend degrees
+# ===== Bend degrees (tune here) =====
 BEND_LEFT_STATE_RIGHT_DEG  = -20.0  # N1
 BEND_MID_STATE_RIGHT_DEG   = -20.0  # N2
 BEND_MID_STATE_LEFT_DEG    = +20.0  # N3
 BEND_RIGHT_STATE_LEFT_DEG  = +20.0  # N4
 
+# Runtime
+THREADS_IO          = max(2, (os.cpu_count() or 4) // 2)
+SHOW_FIRST_N        = None     # None → all frames
+
 # =======================
-# System / backends
+# Jake lane points
+# =======================
+LANE_LEFT   = (300, 1340)
+LANE_MID    = (490, 1340)
+LANE_RIGHT  = (680, 1340)
+JAKE_POINT  = LANE_RIGHT  # pick: LANE_LEFT / LANE_MID / LANE_RIGHT
+
+LANE_TARGET_DEG = {"left": -10.7, "mid": +1.5, "right": +15.0}
+
+def lane_name_from_point(p):
+    if p == LANE_LEFT:  return "left"
+    if p == LANE_MID:   return "mid"
+    if p == LANE_RIGHT: return "right"
+    return "mid"
+
+# =======================
+# System/Backends
 # =======================
 cv2.setUseOptimized(True)
-try:
-    cv2.setNumThreads(max(1, (os.cpu_count() or 1) - 1))
-except Exception:
-    pass
+try: cv2.setNumThreads(max(1, (os.cpu_count() or 1) - 1))
+except Exception: pass
 
 if torch.cuda.is_available():
     device, half = 0, True
@@ -129,38 +86,43 @@ else:
     device, half = "cpu", False
 
 # =======================
-# Model (singleton, warmed)
+# Model
 # =======================
 model = YOLO(weights)
 try: model.fuse()
 except Exception: pass
 
+# warmup
 _dummy = np.zeros((IMG_SIZE, IMG_SIZE, 3), np.uint8)
 _ = model.predict(_dummy, task="segment", imgsz=IMG_SIZE, device=device,
                   conf=CONF, iou=IOU, verbose=False, half=half, max_det=MAX_DET)
 
 # =======================
-# Precomputed tables
+# Precomputed & class buckets
 # =======================
-TARGETS_BGR_F32 = np.array([(r, g, b)[::-1] for (r, g, b) in TARGET_COLORS_RGB], dtype=np.float32)
+TARGETS_BGR_F32 = np.array([(r,g,b)[::-1] for (r,g,b) in TARGET_COLORS_RGB], dtype=np.float32)
 TOL2            = TOLERANCE * TOLERANCE
-MORPH_OPEN_SE   = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
 
+# Class buckets for probe classification (first-hit wins)
 DANGER_RED   = {1, 6, 7, 11}
 WARN_YELLOW  = {2, 3, 4, 5, 8}
 BOOTS_PINK   = {0}
 
-def lane_name_from_point(p):
-    if p == LANE_LEFT:  return "left"
-    if p == LANE_MID:   return "mid"
-    if p == LANE_RIGHT: return "right"
-    return "mid"
-
+# ====== tiny helpers ======
 def _clampi(v, lo, hi):
     return lo if v < lo else (hi if v > hi else v)
 
+def load_image_with_time(path: str):
+    t0 = time.perf_counter()
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    return img, (time.perf_counter() - t0) * 1000.0
+
+def chunked(iterable, n):
+    for i in range(0, len(iterable), n):
+        yield iterable[i:i+n]
+
 # =======================
-# Pipeline helpers
+# Fast rails green finder
 # =======================
 def highlight_rails_mask_only_fast(img_bgr, rail_mask):
     H, W = rail_mask.shape
@@ -178,8 +140,8 @@ def highlight_rails_mask_only_fast(img_bgr, rail_mask):
     colour_hit = (dist2 <= TOL2).any(-1)
 
     combined = np.logical_and(colour_hit, mask_roi.astype(bool))
-    comp = combined.astype(np.uint8)
 
+    comp = combined.astype(np.uint8)
     n, lbls, stats, _ = cv2.connectedComponentsWithStats(comp, 8)
     if n <= 1: return np.zeros((H, W), dtype=bool)
 
@@ -208,12 +170,15 @@ def purple_triangles(score, H):
     dark = (score >= RED_SCORE_THRESH).astype(np.uint8, copy=False)
     if top_ex: dark[:top_ex, :] = 0
     if bot_ex: dark[-bot_ex:, :] = 0
-    dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, MORPH_OPEN_SE, iterations=1)
 
+    dark = cv2.morphologyEx(
+        dark, cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9)), iterations=1
+    )
     total_dark = int(dark.sum())
     if total_dark == 0: return [], None
-    frac_thresh = int(np.ceil(MIN_DARK_FRACTION * total_dark))
 
+    frac_thresh = int(np.ceil(MIN_DARK_FRACTION * total_dark))
     n_lbl, lbls, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
     if n_lbl <= 1: return [], None
 
@@ -231,6 +196,7 @@ def purple_triangles(score, H):
     best = min(tris, key=lambda xy: xy[1])
     return tris, best
 
+# ===== Bearing-based Jake triangle selection =====
 def signed_degrees_from_vertical(dx, dy):
     if dx == 0 and dy == 0: return 0.0
     return -math.degrees(math.atan2(dx, -dy))
@@ -247,6 +213,7 @@ def select_triangle_by_bearing(tri_positions, jx, jy, target_deg, min_dy=6):
             best_i, best_deg, best_err = i, deg, err
     return best_i, best_deg, best_err
 
+# ===== Lane-aware curved sampling (precompute sin/cos) =====
 def _precompute_trig():
     angles = sorted(set([0.0,
         BEND_LEFT_STATE_RIGHT_DEG,
@@ -257,7 +224,7 @@ def _precompute_trig():
     table = {}
     for a in angles:
         r = math.radians(a)
-        table[a] = (math.sin(r), -math.cos(r))  # (dx, dy) unit ray (up = -y)
+        table[a] = (math.sin(r), -math.cos(r))  # (dx, dy) for unit ray (up = -y)
     return table
 TRIG_TABLE = _precompute_trig()
 
@@ -272,6 +239,7 @@ def pick_bend_angle(jake_point, xt, x_ref, idx, best_idx):
     if xt < x_ref: return BEND_MID_STATE_LEFT_DEG
     return 0.0
 
+# --------- Walk-the-ray classifier (20px steps, first-hit wins) ----------
 def classify_triangles_at_sample_curved(
     tri_positions, masks_np, classes_np, H, W,
     jake_point, x_ref, best_idx, sample_px=SAMPLE_UP_PX, step_px=RAY_STEP_PX
@@ -283,6 +251,7 @@ def classify_triangles_at_sample_curved(
     sx = (mw - 1) / max(1, (W - 1))
     sy = (mh - 1) / max(1, (H - 1))
 
+    # Build index lists once per frame
     red_idx    = [i for i, c in enumerate(classes_np) if int(c) in DANGER_RED]
     yellow_idx = [i for i, c in enumerate(classes_np) if int(c) in WARN_YELLOW]
     boots_idx  = [i for i, c in enumerate(classes_np) if int(c) in BOOTS_PINK]
@@ -302,29 +271,41 @@ def classify_triangles_at_sample_curved(
             mx = _clampi(int(round(xs * sx)), 0, mw-1)
             my = _clampi(int(round(ys * sy)), 0, mh-1)
 
+            # RED first
             for i in red_idx:
                 if masks_np[i][my, mx] > 0.5:
-                    hit_colour = 3; break
+                    hit_colour = 3  # code for RED
+                    break
             if hit_colour is not None: break
+            # then YELLOW
             for i in yellow_idx:
                 if masks_np[i][my, mx] > 0.5:
-                    hit_colour = 2; break
+                    hit_colour = 2  # YELLOW
+                    break
             if hit_colour is not None: break
+            # then BOOTS (pink)
             for i in boots_idx:
                 if masks_np[i][my, mx] > 0.5:
-                    hit_colour = 1; break
+                    hit_colour = 1  # PINK
+                    break
             if hit_colour is not None: break
 
+        # map code to color (None → GREEN)
         if hit_colour == 3: colours.append((0,0,255))
         elif hit_colour == 2: colours.append((0,255,255))
         elif hit_colour == 1: colours.append((203,192,255))
         else: colours.append((0,255,0))
-    return colours
 
-def process_frame_post(frame_bgr, yolo_res, jake_point):
+    return colours
+# -----------------------------------------------------------------------
+
+# =======================
+# Frame post-processing
+# =======================
+def process_frame_post(frame_bgr, yolo_res):
     H, W = frame_bgr.shape[:2]
     if yolo_res.masks is None:
-        return 0, 0, 0.0, 0.0
+        return 0, 0, 0.0, 0.0  # triangles, masks, to_cpu_ms, post_ms
 
     t0 = time.perf_counter()
     masks_np = yolo_res.masks.data.detach().cpu().numpy()  # [n,h,w]
@@ -333,7 +314,6 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
     else:
         classes_np = yolo_res.boxes.cls.detach().cpu().numpy().astype(int)
     to_cpu_ms = (time.perf_counter() - t0) * 1000.0
-
     mask_count = int(masks_np.shape[0])
     if mask_count == 0 or classes_np.size == 0:
         return 0, mask_count, to_cpu_ms, 0.0
@@ -347,90 +327,146 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
     union = np.any(rail_masks, axis=0).astype(np.uint8, copy=False)
     rail_mask = cv2.resize(union, (W, H), interpolation=cv2.INTER_NEAREST).astype(bool, copy=False)
 
+    # rails: split into green vs red
     green = highlight_rails_mask_only_fast(frame_bgr, rail_mask)
     red   = np.logical_and(rail_mask, np.logical_not(green))
     score = red_vs_green_score(red, green)
     tri_positions, _ = purple_triangles(score, H)
 
     # choose Jake triangle and set x_ref
-    lane_name = lane_name_from_point(jake_point)
+    lane_name = lane_name_from_point(JAKE_POINT)
     target_deg = LANE_TARGET_DEG[lane_name]
-    xj, yj = jake_point
+    xj, yj = JAKE_POINT
     best_idx, _, _ = select_triangle_by_bearing(tri_positions, xj, yj, target_deg, min_dy=6)
     x_ref = tri_positions[best_idx][0] if (lane_name == "mid" and 0 <= best_idx < len(tri_positions)) else xj
 
-    # run probe classification (not used further here, but triggers same work)
+    # run probe classification (not used further here, but keeps same behavior)
     _ = classify_triangles_at_sample_curved(
-        tri_positions, masks_np, classes_np, H, W, jake_point, x_ref, best_idx,
+        tri_positions, masks_np, classes_np, H, W, JAKE_POINT, x_ref, best_idx,
         SAMPLE_UP_PX, RAY_STEP_PX
     )
     post_ms = (time.perf_counter() - t1) * 1000.0
 
     return len(tri_positions), mask_count, to_cpu_ms, post_ms
 
-def process_image_bgr(img_bgr, name, jake_point):
-    """Process one BGR frame already in memory and print timing line."""
-    if img_bgr is None:
-        return
-    predict = model.predict  # local binding
+# =======================
+# Core runner (accepts explicit list of image paths)
+# =======================
+def run_fast(paths=None):
+    predict = model.predict  # bind hot names to locals
+    synchronize_cuda = torch.cuda.synchronize if torch.cuda.is_available() else None
 
-    # In live mode there's no disk read; keep field for consistency
-    read_ms = 0.0
+    if paths is None:
+        paths = (
+            glob.glob(str(frames_dir/"frame_*.jpg")) +
+            glob.glob(str(frames_dir/"frame_*.png")) +
+            glob.glob(str(frames_dir/"*.jpg")) +
+            glob.glob(str(frames_dir/"*.png"))
+        )
+    paths = sorted(set(p for p in (paths or []) if os.path.isfile(p)))
+    if not paths:
+        raise FileNotFoundError(f"No valid images. Checked explicit paths and: {frames_dir}")
+    if SHOW_FIRST_N is not None:
+        paths = paths[:SHOW_FIRST_N]
 
-    t0_inf = time.perf_counter()
-    yres_list = predict(
-        [img_bgr], task="segment", imgsz=IMG_SIZE, device=device,
-        conf=CONF, iou=IOU, verbose=False, half=half, max_det=MAX_DET, batch=1
-    )
-    infer_ms = (time.perf_counter() - t0_inf) * 1000.0
+    N = len(paths)
 
-    yres = yres_list[0]
-    tri_count, mask_count, to_cpu_ms, post_ms = process_frame_post(img_bgr, yres, jake_point)
-    proc_ms = infer_ms + to_cpu_ms + post_ms
+    def load_batch(batch_paths):
+        # Threaded I/O even for single image (overhead is tiny; keeps code uniform)
+        imgs, read_ms = [None]*len(batch_paths), [0.0]*len(batch_paths)
+        with ThreadPoolExecutor(max_workers=THREADS_IO) as ex:
+            fut2i = {ex.submit(load_image_with_time, p): i for i, p in enumerate(batch_paths)}
+            for fut in as_completed(fut2i):
+                i = fut2i[fut]
+                im, r = fut.result()
+                imgs[i] = im; read_ms[i] = r
+        ok = [(p, im, rm) for p, im, rm in zip(batch_paths, imgs, read_ms) if im is not None]
+        if not ok: return [], [], []
+        b_paths, b_imgs, b_read = zip(*ok)
+        return list(b_paths), list(b_imgs), list(b_read)
 
-    print(f"[live] {name}  "
-          f"read {read_ms:.1f} | infer {infer_ms:.1f} | "
-          f"to_cpu {to_cpu_ms:.1f} | post {post_ms:.1f} | "
-          f"masks {mask_count} | triangles {tri_count} "
-          f"=> proc {proc_ms:.1f} ms")
+    idx_global = 0
+    for batch_paths in chunked(paths, 1):  # keep batch=1; fastest with current postproc
+        batch_paths, imgs_bgr, read_ms_list = load_batch(batch_paths)
+        if not imgs_bgr:
+            idx_global += len(batch_paths); continue
+
+        t0_inf = time.perf_counter()
+        res_list = predict(
+            imgs_bgr, task="segment", imgsz=IMG_SIZE, device=device,
+            conf=CONF, iou=IOU, verbose=False, half=half, max_det=MAX_DET, batch=1
+        )
+        try:
+            if device == 0 and synchronize_cuda is not None:
+                synchronize_cuda()
+            elif device == "mps" and getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                torch.mps.synchronize()
+        except Exception:
+            pass
+        infer_ms_share = (time.perf_counter() - t0_inf) * 1000.0
+
+        for j, (img, yres, read_ms) in enumerate(zip(imgs_bgr, res_list, read_ms_list)):
+            tri_count, mask_count, to_cpu_ms, post_ms = process_frame_post(img, yres)
+
+            proc_ms = infer_ms_share + to_cpu_ms + post_ms
+            fname = os.path.basename(batch_paths[j])
+            frame_idx = idx_global + j + 1
+
+            all_proc_times.append(proc_ms)
+            # Keep this single useful print:
+            print(f"[{frame_idx}/{N}] {fname}  "
+                  f"read {read_ms:.1f} | infer {infer_ms_share:.1f} | "
+                  f"to_cpu {to_cpu_ms:.1f} | post {post_ms:.1f} | "
+                  f"masks {mask_count} | triangles {tri_count} "
+                  f"=> proc {proc_ms:.1f} ms")
+
+        idx_global += 1
 
 # =======================
-# Live loop
+# Convenience: single-image kick-off
 # =======================
+def run_on_image(image_path: str):
+    """Kick the whole process off for a single image path (keeps the same prints)."""
+    if not os.path.isfile(image_path):
+        raise FileNotFoundError(f"Image not found: {image_path}")
+    run_fast(paths=[image_path])
 
-# Output folder for saved frames
-out_dir = Path.home() / "Documents" / "GitHub" / "Ai-plays-SubwaySurfers" / "live_run"
-out_dir.mkdir(parents=True, exist_ok=True)
+# =======================
+# Entry
+# =======================
+if __name__ == "__main__":
+    # Usage:
+    #   python script.py /path/to/image.jpg     -> runs on that one image
+    #   python script.py                         -> runs on all frames in frames_dir (benchmark)
+    if len(sys.argv) > 1:
+        run_on_image(sys.argv[1])
+    else:
+        run_fast()  # iterate frames_dir for full-speed benchmarking
 
-prev_ts = time.time()
-frame_idx = 0
 
-while running:
-    # Grab screen region
-    left, top, width, height = snap_coords
-    raw = sct.grab({"left": left, "top": top, "width": width, "height": height})
-    frame_bgr = np.array(raw)[:, :, :3]  # BGRA -> BGR
+    if all_proc_times:
+        # Ignore first 10 and last 10 frames
+        if len(all_proc_times) > 20:
+            proc_times = all_proc_times[10:-10]
+        else:
+            proc_times = all_proc_times[:]  # not enough frames to trim
 
-    # Determine JAKE_POINT for this frame from current lane (0/1/2)
-    jake_point = LANE_POINTS[lane]
+        arr = np.array(proc_times)
+        mean = arr.mean()
+        std = arr.std(ddof=1)
+        median = np.median(arr)
+        p_min, p_max = arr.min(), arr.max()
 
-    # Process immediately (no batching, no saving)
-    frame_idx += 1
-    process_image_bgr(frame_bgr, name=f"frame_{frame_idx:05d}", jake_point=jake_point)
+        print("\n=== Frame Time Distribution (excluding first/last 10 frames) ===")
+        print(f"Frames: {len(arr)}")
+        print(f"Mean   : {mean:.2f} ms")
+        print(f"Median : {median:.2f} ms")
+        print(f"StdDev : {std:.2f} ms")
+        print(f"Min    : {p_min:.2f} ms")
+        print(f"Max    : {p_max:.2f} ms")
 
-    # Save a copy with JAKE_POINT text at top-left (does not affect inference)
-    annotated = frame_bgr.copy()
-    jp_name = lane_name_from_point(jake_point).upper()
-    cv2.putText(annotated, f"JAKE_POINT: {jp_name}",
-                (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
-    out_path = out_dir / f"live_{frame_idx:05d}.jpg"
-    cv2.imwrite(str(out_path), annotated)
+        # Optional ASCII histogram
+        hist, bins = np.histogram(arr, bins=10)
+        for h, b1, b2 in zip(hist, bins[:-1], bins[1:]):
+            print(f"{b1:6.1f}–{b2:6.1f} ms | {'█' * h}")
 
-    # (Optional) inter-frame delta print — comment out if noisy
-    now = time.time()
-    # print(f"Δ between frames: {now - prev_ts:.3f}s")
-    prev_ts = now
-
-# Cleanup
-listener.join()
-print("Script halted.")
