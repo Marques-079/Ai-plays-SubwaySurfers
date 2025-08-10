@@ -201,6 +201,13 @@ Planning logic for ground movement:
  jumping between trains we discard scanning. If blip touches ground consecutive and != airtime then regrounded 
  - Isolate 3D plane into a unwarped 2D birdseye plane to find optimal 
 
+11/08/25
+Big progress on logic movement. 
+First runs implmented im skeptical on the validitu although its showing some promise 
+Moreso patching leaks and flaws in the ground hardcode. 
+
+I think the greatest fix will be to buffer out the slower inference. This can be done by using speed to calculated when we should jump rather than a frame by frame basis. 
+
 
  
 
