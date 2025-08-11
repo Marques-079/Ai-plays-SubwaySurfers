@@ -144,6 +144,198 @@ def lane_name_from_point(p):
 
 # ===== Movement logic (modular) HELPER FUNCTIOSNS==============================================================================================================
 
+# One-shot gating
+try:
+    IMPACT_TOKEN
+except NameError:
+    IMPACT_TOKEN = None  # (lane, class_id)
+
+def _fire_action_key(key: str):
+    global IMPACT_TOKEN
+    if not MOVEMENT_ENABLED:
+        return
+    try:
+        pyautogui.press(key)
+        print(f"[TIMER FIRE] pressed {key}")
+    except Exception as e:
+        print(f"[TIMER FIRE] failed: {e}")
+    finally:
+        IMPACT_TOKEN = None
+
+
+# Only arm timer when distance is strictly inside this window (px)
+IMPACT_MIN_PX = 400
+IMPACT_MAX_PX = 800
+
+# ===== Impact delay lookup (distance px -> seconds) =====
+# Fill these with your *monotone ascending* distances (px) and corresponding delays (seconds).
+# Example placeholders; REPLACE with your numbers:
+LUT_PX = np.array([200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750], dtype=float)
+
+SHORTEN_S = 0.10 #Shortnen by 100ms
+# Safety clamps so Timer never explodes or becomes a no-op
+MIN_DELAY_S = 0.03   # 30 ms
+MAX_DELAY_S = 2.00   # 2 s
+
+LUT_S = np.clip(np.array([0.0481, 0.0655, 0.0893, 0.1216, 0.1656, 0.2256, 0.3073, 0.4185, 0.5701, 0.7765, 1.0578, 1.4408], dtype=float) - SHORTEN_S, MIN_DELAY_S, MAX_DELAY_S)
+
+
+
+
+def first_mask_hit_starburst_then_ray_for_set(
+    jake_point, tri_pos, theta_deg, masks_np, classes_np, H, W,
+    allowed_classes, up2_px=SAMPLE_UP_PX, step_px=2
+):
+    """
+    Same as first_mask_hit_starburst_then_ray, but only counts hits whose class ∈ allowed_classes.
+    Returns (dist_px_from_jake, (x_hit, y_hit), class_id) or (None, None, None).
+    """
+    if masks_np is None or classes_np is None or masks_np.size == 0:
+        return (None, None, None)
+
+    mh, mw = masks_np.shape[1], masks_np.shape[2]
+    sx = (mw - 1) / max(1, (W - 1))
+    sy = (mh - 1) / max(1, (H - 1))
+
+    allowed = set(int(c) for c in allowed_classes)
+    idxs = [i for i, c in enumerate(classes_np) if int(c) in allowed]
+    if not idxs:
+        return (None, None, None)
+
+    def _hit_at(xs, ys):
+        mx = _clampi(int(round(xs * sx)), 0, mw-1)
+        my = _clampi(int(round(ys * sy)), 0, mh-1)
+        for i in idxs:
+            if masks_np[i][my, mx] > 0.5:
+                return int(classes_np[i])
+        return None
+
+    x0, y0 = map(int, jake_point)
+    x1, y1 = map(int, tri_pos)
+    x0 = _clampi(x0, 0, W-1); y0 = _clampi(y0, 0, H-1)
+    x1 = _clampi(x1, 0, W-1); y1 = _clampi(y1, 0, H-1)
+
+    dx = x1 - x0; dy = y1 - y0
+    seg1_len = max(1e-6, math.hypot(dx, dy))
+    n1 = max(1, int(seg1_len // max(1, step_px)))
+    for k in range(1, n1 + 1):
+        t = min(1.0, (k * step_px) / seg1_len)
+        xs = _clampi(int(round(x0 + dx * t)), 0, W-1)
+        ys = _clampi(int(round(y0 + dy * t)), 0, H-1)
+        cls_hit = _hit_at(xs, ys)
+        if cls_hit is not None:
+            dist = math.hypot(xs - x0, ys - y0)
+            return (float(dist), (int(xs), int(ys)), int(cls_hit))
+
+    dxr, dyr = TRIG_TABLE.get(theta_deg, (0.0, -1.0))
+    n2 = max(1, int(up2_px // max(1, step_px)))
+    for k in range(1, n2 + 1):
+        t = k * step_px
+        xs = _clampi(int(round(x1 + dxr * t)), 0, W-1)
+        ys = _clampi(int(round(y1 + dyr * t)), 0, H-1)
+        cls_hit = _hit_at(xs, ys)
+        if cls_hit is not None:
+            dist = seg1_len + math.hypot(xs - x1, ys - y1)
+            return (float(dist), (int(xs), int(ys)), int(cls_hit))
+
+    return (None, None, None)
+
+
+# ===== Impact-timer overhaul (single-triangle action) =====
+# Classes to act on (exact mapping)
+IMPACT_CLASSES = {2, 3, 4, 5}  # 2:HIGHBARRIER1, 3:JUMP, 4:LOWBARRIER1, 5:LOWBARRIER2
+ACTION_BY_CLASS = {3: "up", 5: "up", 4: "down", 2: "down"}  # per spec
+
+# Only arm timer when distance is strictly inside this window (px)
+IMPACT_MIN_PX = 400
+IMPACT_MAX_PX = 800
+
+# Global timer handle (overwritten when re-arming)
+try:
+    IMPACT_TIMER
+except NameError:
+    IMPACT_TIMER = None
+
+
+def _cancel_impact_timer(reason=None):
+    global IMPACT_TIMER
+    if IMPACT_TIMER is not None and getattr(IMPACT_TIMER, "is_alive", lambda: False)():
+        print("[TIMER] cancelled" + (f" ({reason})" if reason else ""))
+        try:
+            IMPACT_TIMER.cancel()
+        except Exception:
+            pass
+    IMPACT_TIMER = None
+
+
+
+def _impact_delay_seconds(dist_px: float) -> float:
+    """
+    O(1) lookup + linear interpolation from a monotone table (px -> seconds).
+    - Dist is cropped to [IMPACT_MIN_PX, IMPACT_MAX_PX] to preserve your windowing.
+    - Result is clamped to [MIN_DELAY_S, MAX_DELAY_S] for Timer safety.
+    """
+    if not math.isfinite(dist_px):
+        return MIN_DELAY_S
+
+    # Respect your arming window; crop inside it so behavior matches old gating.
+    d = max(IMPACT_MIN_PX, min(float(dist_px), IMPACT_MAX_PX))
+
+    # Interpolate within the table’s range
+    lo = float(LUT_PX[0]); hi = float(LUT_PX[-1])
+    d_clamped = max(lo, min(d, hi))
+
+    delay = float(np.interp(d_clamped, LUT_PX, LUT_S))
+    # Final safety clamp
+    return max(MIN_DELAY_S, min(delay, MAX_DELAY_S))
+
+
+def _fire_action_key(key: str):
+    if not MOVEMENT_ENABLED:
+        return
+    try:
+        pyautogui.press(key)
+        print(f"[TIMER FIRE] pressed {key}")
+    except Exception as e:
+        print(f"[TIMER FIRE] failed: {e}")
+
+def _arm_impact_timer(dist_px: float, cls_id: int):
+    """
+    Overwrite-or-set the global timer if dist is in (400, 800) px and class is in IMPACT_CLASSES.
+    Prints whether we armed a NEW timer or UPDATED (overwrote) an existing one.
+    """
+    if cls_id not in IMPACT_CLASSES:
+        return
+
+    if not (IMPACT_MIN_PX < dist_px < IMPACT_MAX_PX):
+        # Optional debug: show why we didn't arm
+        print(f"[TIMER] skip: dist {dist_px:.1f}px outside ({IMPACT_MIN_PX},{IMPACT_MAX_PX}) for {LABELS.get(int(cls_id), cls_id)}")
+        return
+
+    key = ACTION_BY_CLASS.get(int(cls_id))
+    if not key:
+        return
+
+    delay_s = _impact_delay_seconds(dist_px)
+
+    if not math.isfinite(delay_s) or delay_s <= 0.0:
+        print(f"[TIMER] skip: invalid delay {delay_s} for dist={dist_px:.1f}px, cls={LABELS.get(int(cls_id), cls_id)}")
+        return
+
+    # detect whether we are overwriting a live timer
+    global IMPACT_TIMER
+    was_live = (IMPACT_TIMER is not None and getattr(IMPACT_TIMER, "is_alive", lambda: False)())
+
+    _cancel_impact_timer()  # overwrite existing timer if any
+
+    from threading import Timer
+    IMPACT_TIMER = Timer(delay_s, _fire_action_key, args=(key,))
+    IMPACT_TIMER.daemon = True
+    IMPACT_TIMER.start()
+
+    status = "updated" if was_live else "armed"
+    print(f"[TIMER] {status}: key={key} in {delay_s:.3f}s  (dist={dist_px:.1f}px, cls={LABELS.get(int(cls_id), cls_id)})")
+
 
 def first_mask_hit_starburst_then_ray(
     jake_point, tri_pos, theta_deg, masks_np, classes_np, H, W,
@@ -271,7 +463,7 @@ def first_mask_hit_along_segment(jake_point, tri_pos, masks_np, classes_np,
 LOWBARRIER1_ID   = 4
 ORANGETRAIN_ID   = 6
 WALL_STRIP_PX    = 5           # vertical strip height checked just above the barrier
-WALL_MATCH_FRAC  = 0.80         # % of “wall” pixels required to relabel
+WALL_MATCH_FRAC  = 0.90         # % of “wall” pixels required to relabel
 WALL_ORANGE_LO = np.array([5,  80,  60], dtype=np.uint8)   # H,S,V (lo)
 WALL_ORANGE_HI = np.array([35, 255, 255], dtype=np.uint8)  # H,S,V (hi)
 
@@ -363,14 +555,12 @@ def _detect_lane_by_whiteness(img_bgr):
     return best_idx if counts[best_idx] > 0 else None
 
 
-
-
 # action cooldown so we don't spam jump/duck
 try:
     last_action_ts
 except NameError:
     last_action_ts = 0.0
-ACTION_COOLDOWN_S = 1000000
+ACTION_COOLDOWN_S = 0.0
 
 # distance threshold (pixels) from Jake to triangle apex for action decisions
 ACTION_DIST_PX = 30
@@ -378,33 +568,8 @@ ACTION_DIST_PX = 30
 def _is_warn(cls_id: int | None) -> bool:
     return (cls_id is not None) and (int(cls_id) in WARN_FOR_MOVE)
 
-def _dist_px(jx: int, jy: int, tx: int, ty: int) -> float:
-    return math.hypot(tx - jx, ty - jy)
-
-def _pick_best_green(cands, jx: int):
-    """Choose the closest triangle with hit_class == None (no hit along ray)."""
-    greens = [c for c in cands if c["hit_class"] is None]
-    if not greens:
-        return None
-    greens = [c for c in greens if c["pos"][0] != jx] or greens
-    return min(greens, key=lambda c: abs(c["pos"][0] - jx))
-
 def _schedule(fn, *args, **kwargs):
     Thread(target=fn, args=args, kwargs=kwargs, daemon=True).start()
-
-def _do_jump_then_duck(delay_s: float = 0.50):
-    pyautogui.press(JUMP_KEY)
-    time.sleep(delay_s)
-    pyautogui.press(DUCK_KEY)
-
-def _try_jump_then_duck():
-    if not MOVEMENT_ENABLED:
-        return
-    global last_action_ts
-    now = time.perf_counter()
-    if now - last_action_ts >= ACTION_COOLDOWN_S:
-        last_action_ts = now
-        _schedule(_do_jump_then_duck, 0.20)
 
 MIN_GREEN_AHEAD_PX = 400
 def _filter_green_far(cands, jake_band_y: int, min_ahead_px: int = MIN_GREEN_AHEAD_PX):
@@ -907,6 +1072,24 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
     lane_name = lane_name_from_point(jake_point)
     target_deg = LANE_TARGET_DEG[lane_name]
     xj, yj = jake_point
+
+    MIN_AHEAD_FROM_JAKE_PX = 120  # tune (e.g., 80–160)
+    tri_positions = [p for p in tri_positions if (yj - p[1]) >= MIN_AHEAD_FROM_JAKE_PX]
+
+    # Filter triangles by absolute angle from vertical (≤ 45°) and at least 6px above Jake
+    ANGLE_MAX_DEG = 45.0
+    MIN_DY_ABOVE  = 100
+
+    def _angle_ok(p):
+        xt, yt = p
+        dy = yt - yj
+        if dy >= -MIN_DY_ABOVE:     # must be above Jake
+            return False
+        deg = signed_degrees_from_vertical(xt - xj, dy)
+        return abs(deg) <= ANGLE_MAX_DEG
+
+    tri_positions = [p for p in tri_positions if _angle_ok(p)]
+
     best_idx, best_deg, _ = select_triangle_by_bearing(tri_positions, xj, yj, target_deg, min_dy=6)
 
     # x_ref for bending
@@ -948,28 +1131,52 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
         y_hit_log = first_red_hit_y(jake_tri["pos"], masks_np, classes_np, H, W, band_px=6, step_px=5)
         obstacle_dist_px = (jy - y_hit_log) if y_hit_log is not None else None
 
-        # --- 1) Context actions based on distance to the obstacle ahead of Jake ---
-        if jake_hit is not None:
-            # choose which classes to probe vertically based on what Jake actually hit
-            if int(jake_hit) in DUCK_SET:
-                probe_set = DUCK_SET              # {2,4}  (High/LowBarrier1)
-            elif int(jake_hit) in JUMP_SET:
-                probe_set = JUMP_SET              # {3,5,10} (Jump, LowBarrier2, Sidewalk)
+        # "Yellow in Jake's lane" == Jake's own triangle has a WARN_YELLOW class.
+        jake_cls = jake_tri.get("hit_class", None)
+        if (jake_cls is not None) and (int(jake_cls) in WARN_YELLOW) and (int(jake_cls) in IMPACT_CLASSES):
+            # theta actually used for Jake’s ray (matches overlay)
+            theta_deg = float(tri_rays[best_idx][2]) if (best_idx is not None and 0 <= best_idx < len(tri_rays)) else 0.0
+            allowed_set = JUMP_SET if int(jake_cls) in JUMP_SET else DUCK_SET
+
+            dist_px, _, _ = first_mask_hit_starburst_then_ray_for_set(
+                jake_point=JAKE_POINT,
+                tri_pos=jake_tri["pos"],
+                theta_deg=theta_deg,
+                masks_np=masks_np, classes_np=classes_np, H=H, W=W,
+                allowed_classes=allowed_set,
+                up2_px=SAMPLE_UP_PX, step_px=2
+            )
+
+            # ---- token: only lane + class ----
+            new_token = (lane, int(jake_cls))
+
+            global IMPACT_TOKEN
+            # Only arm if no timer for this token yet
+            if IMPACT_TOKEN is None:
+                if dist_px is not None and (IMPACT_MIN_PX < dist_px < IMPACT_MAX_PX):
+                    _arm_impact_timer(float(dist_px), int(jake_cls))
+                    IMPACT_TOKEN = new_token
+                    print(f"[TIMER] lock token {IMPACT_TOKEN}")
+                # else: don’t arm; wait for next frame when it enters the window
+
             else:
-                probe_set = DANGER_RED            # fallback: red set
-
-            y_hit = first_hit_y(jake_tri["pos"], masks_np, classes_np, H, W, probe_set, band_px=6, step_px=5)
-            dpx = (jy - y_hit) if y_hit is not None else None
-
-            if dpx is not None:
-                if int(jake_hit) in JUMP_SET and dpx <= ACTION_DIST_PX:
-                    if MOVEMENT_ENABLED:
-                        print(f"[ACT] jump+duck → reason: {LABELS.get(int(jake_hit), str(jake_hit))} at { _fmt_px(dpx) } (<= {ACTION_DIST_PX}px)")
-                    _try_jump_then_duck()
-                elif int(jake_hit) in DUCK_SET and dpx <= ACTION_DIST_PX:
-                    if MOVEMENT_ENABLED:
-                        print(f"[ACT] duck → reason: {LABELS.get(int(jake_hit), str(jake_hit))} at { _fmt_px(dpx) } (<= {ACTION_DIST_PX}px)")
-                    _try_duck()
+                if IMPACT_TOKEN == new_token:
+                    # Same situation → do nothing (no cancel, no re-arm), even if dist jitters/out of window
+                    pass
+                else:
+                    # Situation changed (lane or class) → cancel old and arm once for new (if in window)
+                    _cancel_impact_timer("token change")
+                    if dist_px is not None and (IMPACT_MIN_PX < dist_px < IMPACT_MAX_PX):
+                        _arm_impact_timer(float(dist_px), int(jake_cls))
+                        IMPACT_TOKEN = new_token
+                        print(f"[TIMER] lock token {IMPACT_TOKEN} (replaced)")
+                    else:
+                        IMPACT_TOKEN = None  # no valid new timer yet
+        else:
+            # Jake’s triangle not yellow/impact anymore → cancel & unlock
+            if IMPACT_TOKEN is not None:
+                _cancel_impact_timer("no longer impact in Jake lane")
+                IMPACT_TOKEN = None
 
 
         # --- 2) Lateral pathing decisions (policy: GREEN first) --------------------

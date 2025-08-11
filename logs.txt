@@ -208,6 +208,22 @@ Moreso patching leaks and flaws in the ground hardcode.
 
 I think the greatest fix will be to buffer out the slower inference. This can be done by using speed to calculated when we should jump rather than a frame by frame basis. 
 
+Proximity equation: y=0.00139754 * 483.35867^x
 
+This shows that there is an exponential relationship between pxl distance and time till jumptime y is seconds till jumptime what does this show. 
+Would the correct logic be to say if we have one triangle and red/yellow classed obstacles we engage our action timer. 
+
+Splice our logic into two paths to sperate inference from reaction.
+ - If only yellow triangles or one yellow triangle then activate poximity equation. 
+ - If a single red or multiple red enter jump mode -> excepetionally fast scanning for immediate exit. 
+
+'''
+We need to do a complete logic overhaul here. For the following classes.
+       2: "HIGHBARRIER1", 3: "JUMP",4 : "LOWBARRIER1", 5: "LOWBARRIER2",
+When there is only a single triangle and it is detecting one of the following classes  it should set a global timer to initate the specific movement 'up arrow for jump and lowbarier2 and 
+down arrow for lowbarrier1 and highbarrier1. the timer is callibrated to Proximity equation: y=0.00139754 * 483.35867^x where x is the positive distance away from the object  in pxls /100 
+(how its calculated is in code already) and y * 100 * 1000 is the seconds away it is from impact. The timer is either overwritten or set if distance is > 400pxls away and < 800 pxls away. 
+'''
  
+ BEST_SCORE_ACHIEVED = 1530
 
