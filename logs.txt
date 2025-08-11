@@ -227,3 +227,8 @@ down arrow for lowbarrier1 and highbarrier1. the timer is callibrated to Proximi
  
  BEST_SCORE_ACHIEVED = 1530
 
+Smaller increments on poximity equation
+Inference lockdown between states after movements for 360ms
+
+ BEST_SCORE_ACHIEVED - 2500
+

@@ -144,6 +144,20 @@ def lane_name_from_point(p):
 
 # ===== Movement logic (modular) HELPER FUNCTIOSNS==============================================================================================================
 
+# --- inference pause gate (after imports/globals) ---
+PAUSE_AFTER_MOVE_S = 0.330
+
+try:
+    PAUSE_UNTIL
+except NameError:
+    PAUSE_UNTIL = 0.0  # monotonic timestamp
+
+def pause_inference(sec: float = PAUSE_AFTER_MOVE_S):
+    """Freeze the main loop for `sec` seconds from NOW."""
+    global PAUSE_UNTIL
+    PAUSE_UNTIL = time.monotonic() + sec
+
+
 # One-shot gating
 try:
     IMPACT_TOKEN
@@ -170,16 +184,14 @@ IMPACT_MAX_PX = 800
 # ===== Impact delay lookup (distance px -> seconds) =====
 # Fill these with your *monotone ascending* distances (px) and corresponding delays (seconds).
 # Example placeholders; REPLACE with your numbers:
-LUT_PX = np.array([200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750], dtype=float)
+LUT_PX = np.array([200, 225, 250, 275, 300, 325, 350, 375, 400, 425, 450, 475, 500, 525, 550, 575, 600, 625, 650, 675, 700, 725, 750, 775, 800], dtype=float)
 
-SHORTEN_S = 0.10 #Shortnen by 100ms
+SHORTEN_S = 0.25 #Shortnen by 100ms
 # Safety clamps so Timer never explodes or becomes a no-op
 MIN_DELAY_S = 0.03   # 30 ms
 MAX_DELAY_S = 2.00   # 2 s
 
-LUT_S = np.clip(np.array([0.0481, 0.0655, 0.0893, 0.1216, 0.1656, 0.2256, 0.3073, 0.4185, 0.5701, 0.7765, 1.0578, 1.4408], dtype=float) - SHORTEN_S, MIN_DELAY_S, MAX_DELAY_S)
-
-
+LUT_S = np.clip(np.array([0.0481, 0.0561, 0.0655, 0.0765, 0.0893, 0.1042, 0.1216, 0.1419, 0.1656, 0.1933, 0.2256, 0.2633, 0.3073, 0.3586, 0.4185, 0.4885, 0.5701, 0.6654, 0.7765, 0.9063, 1.0578, 1.2345, 1.4408, 1.6815, 1.9625], dtype=float) - SHORTEN_S, MIN_DELAY_S, MAX_DELAY_S)
 
 
 def first_mask_hit_starburst_then_ray_for_set(
@@ -696,6 +708,7 @@ def _issue_move_towards_x(jx: int, tx: int):
         return
 
     if tx < jx and lane > MIN_LANE:
+        pause_inference()  # 360ms freeze to avoid mid-lane frames
         _synth_block_until = time.monotonic() + SYNTHETIC_SUPPRESS_S
         pyautogui.press('left')
         lane = max(MIN_LANE, lane - 1)
@@ -703,14 +716,15 @@ def _issue_move_towards_x(jx: int, tx: int):
         last_move_ts = now
 
     elif tx > jx and lane < MAX_LANE:
+        pause_inference()  # 360ms freeze to avoid mid-lane frames
         _synth_block_until = time.monotonic() + SYNTHETIC_SUPPRESS_S
         pyautogui.press('right')
         lane = min(MAX_LANE, lane + 1)
         print(f"[AI MOVE] right -> Lane {lane}")
         last_move_ts = now
+
     else:
         print('WE ARE COOKED')
-
 
 #============================================================================================================================================
 
@@ -1357,14 +1371,19 @@ def render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
             danger_only=False             # set True to only consider DANGER_RED
         )
 
-        # draw starburst segment
+        # draw starburst segment (cyan + thicker)
         xj, yj = jake_point
-        cv2.line(out, (xj, yj), (int(xt), int(yt)), COLOR_WHITE, 2, cv2.LINE_AA)
-        # draw the angled continuation for viz
+        cv2.line(out, (xj, yj), (int(xt), int(yt)), COLOR_CYAN, 3, cv2.LINE_AA)
+
+        # draw the angled continuation for viz (cyan + thicker)
         dxr, dyr = TRIG_TABLE.get(float(theta_deg), (0.0, -1.0))
         xe = _clampi(int(round(xt + dxr * SAMPLE_UP_PX)), 0, W-1)
         ye = _clampi(int(round(yt + dyr * SAMPLE_UP_PX)), 0, H-1)
-        cv2.line(out, (int(xt), int(yt)), (xe, ye), COLOR_WHITE, 2, cv2.LINE_AA)
+        cv2.line(out, (int(xt), int(yt)), (xe, ye), COLOR_CYAN, 3, cv2.LINE_AA)
+
+        # OPTIONAL: cyan outline around the best triangle so it pops
+        cv2.polylines(out, [triangle_pts(int(xt), int(yt)).reshape(-1,1,2)], True, COLOR_CYAN, 3, cv2.LINE_AA)
+
 
         if hit_xy is not None:
             cv2.circle(out, hit_xy, 6, (0, 0, 0), -1, cv2.LINE_AA)
@@ -1417,6 +1436,12 @@ sct = mss()
 frame_idx = 0
 
 while running:
+
+    _now = time.monotonic()
+    if _now < PAUSE_UNTIL:
+        time.sleep(PAUSE_UNTIL - _now)
+        continue
+
     # Screen grab
     left, top, width, height = snap_coords
     raw = sct.grab({"left": left, "top": top, "width": width, "height": height})
