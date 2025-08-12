@@ -19,6 +19,17 @@ from threading import Thread
 import time
 start_time = time.perf_counter()
 
+# =======================
+# Live/Offline split config
+# =======================
+out_dir = Path.home() / "Documents" / "GitHub" / "Ai-plays-SubwaySurfers"
+RENDER_OVERLAYS_LIVE = False      # live: skip overlay drawing to save time
+SAVE_RAW_FRAMES      = True       # live: save raw frames for offline pass
+
+RAW_DIR      = out_dir / "raw_live"
+OVERLAY_DIR  = out_dir / "offline_overlays"
+RAW_DIR.mkdir(parents=True, exist_ok=True)
+OVERLAY_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # --- swallow AI-generated keypresses in the listener for a short window ---
@@ -144,9 +155,30 @@ def lane_name_from_point(p):
 
 # ===== Movement logic (modular) HELPER FUNCTIOSNS==============================================================================================================
 
+import queue, threading
+
+save_q = queue.Queue(maxsize=256)
+
+def _disk_saver():
+    while True:
+        item = save_q.get()
+        if item is None:
+            break
+        p, img = item
+        try:
+            cv2.imwrite(str(p), img)
+        except Exception as e:
+            print(f"[SAVE] failed {p}: {e}")
+        finally:
+            save_q.task_done()
+
+threading.Thread(target=_disk_saver, daemon=True).start()
+
+
+
 
 # --- inference pause gate (after imports/globals) ---
-PAUSE_AFTER_MOVE_S = 0.40
+PAUSE_AFTER_MOVE_S = 0.330
 
 try:
     PAUSE_UNTIL
@@ -165,31 +197,34 @@ try:
 except NameError:
     IMPACT_TOKEN = None  # (lane, class_id)
 
-def _fire_action_key(key: str, token_snapshot):
+def _fire_action_key(key: str):
     global IMPACT_TOKEN
-    if MOVEMENT_ENABLED:
+    if not MOVEMENT_ENABLED:
+        return
+    try:
         pyautogui.press(key)
         print(f"[TIMER FIRE] pressed {key}")
-    # allow instant re-arm for the next identical obstacle
-    if IMPACT_TOKEN == token_snapshot:
+    except Exception as e:
+        print(f"[TIMER FIRE] failed: {e}")
+    finally:
         IMPACT_TOKEN = None
 
 
 # Only arm timer when distance is strictly inside this window (px)
-IMPACT_MIN_PX = 100
+IMPACT_MIN_PX = 400
 IMPACT_MAX_PX = 650
 
 # ===== Impact delay lookup (distance px -> seconds) =====
 # Fill these with your *monotone ascending* distances (px) and corresponding delays (seconds).
 # Example placeholders; REPLACE with your numbers:
-LUT_PX = np.array([100, 125, 150, 175, 200, 225, 250, 275, 300, 325, 350, 375, 400, 425, 450, 475, 500, 525, 550, 575, 600, 625, 650, 675, 700, 725, 750, 775, 800], dtype=float)
+LUT_PX = np.array([200, 225, 250, 275, 300, 325, 350, 375, 400, 425, 450, 475, 500, 525, 550, 575, 600, 625, 650, 675, 700, 725, 750, 775, 800], dtype=float)
 
 SHORTEN_S = 0.35 #Shortnen by 100ms
 # Safety clamps so Timer never explodes or becomes a no-op
 MIN_DELAY_S = 0.03   # 30 ms
 MAX_DELAY_S = 2.00   # 2 s
 
-LUT_S = np.clip(np.array([0.0259, 0.0303, 0.0353, 0.0412, 0.0481, 0.0561, 0.0655, 0.0765, 0.0893, 0.1042, 0.1216, 0.1419, 0.1656, 0.1933, 0.2256, 0.2633, 0.3073, 0.3586, 0.4185, 0.4885, 0.5701, 0.6654, 0.7765, 0.9063, 1.0578, 1.2345, 1.4408, 1.6815, 1.9625], dtype=float) - SHORTEN_S, MIN_DELAY_S, MAX_DELAY_S)
+LUT_S = np.clip(np.array([0.0481, 0.0561, 0.0655, 0.0765, 0.0893, 0.1042, 0.1216, 0.1419, 0.1656, 0.1933, 0.2256, 0.2633, 0.3073, 0.3586, 0.4185, 0.4885, 0.5701, 0.6654, 0.7765, 0.9063, 1.0578, 1.2345, 1.4408, 1.6815, 1.9625], dtype=float) - SHORTEN_S, MIN_DELAY_S, MAX_DELAY_S)
 
 
 def first_mask_hit_starburst_then_ray_for_set(
@@ -256,6 +291,10 @@ def first_mask_hit_starburst_then_ray_for_set(
 IMPACT_CLASSES = {2, 3, 4, 5}  # 2:HIGHBARRIER1, 3:JUMP, 4:LOWBARRIER1, 5:LOWBARRIER2
 ACTION_BY_CLASS = {3: "up", 5: "up", 4: "down", 2: "down"}  # per spec
 
+# Only arm timer when distance is strictly inside this window (px)
+IMPACT_MIN_PX = 400
+IMPACT_MAX_PX = 800
+
 # Global timer handle (overwritten when re-arming)
 try:
     IMPACT_TIMER
@@ -296,6 +335,15 @@ def _impact_delay_seconds(dist_px: float) -> float:
     return max(MIN_DELAY_S, min(delay, MAX_DELAY_S))
 
 
+def _fire_action_key(key: str):
+    if not MOVEMENT_ENABLED:
+        return
+    try:
+        pyautogui.press(key)
+        print(f"[TIMER FIRE] pressed {key}")
+    except Exception as e:
+        print(f"[TIMER FIRE] failed: {e}")
+
 def _arm_impact_timer(dist_px: float, cls_id: int):
     """
     Overwrite-or-set the global timer if dist is in (400, 800) px and class is in IMPACT_CLASSES.
@@ -320,20 +368,16 @@ def _arm_impact_timer(dist_px: float, cls_id: int):
         return
 
     # detect whether we are overwriting a live timer
-    # detect whether we are overwriting a live timer
-    global IMPACT_TIMER, IMPACT_TOKEN
+    global IMPACT_TIMER
     was_live = (IMPACT_TIMER is not None and getattr(IMPACT_TIMER, "is_alive", lambda: False)())
 
     _cancel_impact_timer()  # overwrite existing timer if any
 
-    # --- REPLACEMENT: arm with a token so post-fire re-arm is instant ---
-    new_token = (lane, int(cls_id))            # <-- build token for THIS arm
     from threading import Timer
-    IMPACT_TIMER = Timer(delay_s, _fire_action_key, args=(key, new_token))
+    IMPACT_TIMER = Timer(delay_s, _fire_action_key, args=(key,))
     IMPACT_TIMER.daemon = True
     IMPACT_TIMER.start()
 
-    IMPACT_TOKEN = new_token                   # remember what we armed
     status = "updated" if was_live else "armed"
     print(f"[TIMER] {status}: key={key} in {delay_s:.3f}s  (dist={dist_px:.1f}px, cls={LABELS.get(int(cls_id), cls_id)})")
 
@@ -758,6 +802,55 @@ def on_press(key):
     except Exception as e:
         print(f"Error: {e}")
 
+def offline_process_saved_frames():
+    """
+    After live capture ends, re-run the exact postproc + render_overlays for all saved raw frames.
+    Uses the same model, thresholds, and overlay code.
+    Movement is disabled; this is pure visualization rendering.
+    """
+    global MOVEMENT_ENABLED
+    MOVEMENT_ENABLED = False  # make sure no pyautogui fires offline
+
+    files = sorted(RAW_DIR.glob("raw_*.png"))
+    if not files:
+        print("[OFFLINE] No raw frames found. Nothing to do.")
+        return
+
+    print(f"[OFFLINE] Rendering overlays for {len(files)} frames...")
+    for i, f in enumerate(files, 1):
+        frame_bgr = cv2.imread(str(f), cv2.IMREAD_COLOR)
+        if frame_bgr is None:
+            print(f"[OFFLINE] failed to read {f}")
+            continue
+
+        # Inference
+        res_list = model.predict(
+            [frame_bgr], task="segment", imgsz=IMG_SIZE, device=device,
+            conf=CONF, iou=IOU, verbose=False, half=half, max_det=MAX_DET, batch=1
+        )
+        yres = res_list[0]
+
+        # Postproc
+        (tri_best_xy, tri_count, mask_count, to_cpu_ms, post_ms,
+         masks_np, classes_np, rail_mask, green_mask, tri_positions, tri_colours,
+         tri_rays, best_idx, best_deg, x_ref,
+         tri_hit_classes, tri_summary) = process_frame_post(frame_bgr, yres, LANE_POINTS[1])  # use mid as default JAKE_POINT; the function overrides per lane detection anyway
+
+        # Render overlay
+        overlay = render_overlays(
+            frame_bgr, masks_np, classes_np, rail_mask, green_mask,
+            tri_positions, tri_colours, tri_rays, best_idx, best_deg, x_ref, LANE_POINTS[1]
+        )
+
+        out_path = OVERLAY_DIR / f"offline_overlay_{i:05d}.jpg"
+        try:
+            cv2.imwrite(str(out_path), overlay)
+        except Exception as e:
+            print(f"[OFFLINE SAVE] {out_path}: {e}")
+
+    print("[OFFLINE] Done.")
+
+
 
 # =======================
 # System/Backends
@@ -1106,28 +1199,6 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
         SAMPLE_UP_PX, RAY_STEP_PX
     )
 
-    if tri_positions and any(ty >= (H) for _, ty in tri_positions):
-    # compute rail_grad/edge_dist and run the loop
-
-        # --- edge-danger override: triangles too close to rail edges in bottom half ---
-        EDGE_PAD_PX = 50
-
-        # distance-to-rail-edge map (in pixels)
-        rail_grad = cv2.morphologyEx(rail_mask.astype(np.uint8), cv2.MORPH_GRADIENT,
-                                    cv2.getStructuringElement(cv2.MORPH_RECT, (3,3)))
-        # distanceTransform gives distance to the nearest 0; make edges=0, elsewhere=255
-        edge_bg = (rail_grad == 0).astype(np.uint8) * 255
-        edge_dist = cv2.distanceTransform(edge_bg, cv2.DIST_L2, 5)
-
-        # mark triangles as danger if they're within EDGE_PAD_PX of an edge
-        # AND they sit in the bottom half of the screen (y >= H//2)
-        for i, (tx, ty) in enumerate(tri_positions):
-            if ty >= (H // 2) and edge_dist[int(ty), int(tx)] <= EDGE_PAD_PX:
-                tri_colours[i]      = COLOR_RED          # show as red in the overlay
-                tri_hit_classes[i]  = 1                  # any class in DANGER_RED; 1=GREYTRAIN works
-                tri_hit_dists[i]    = 0.0                # optional: treat as immediate
-
-
     post_ms = (time.perf_counter() - t1) * 1000.0
 
     # Minimal movement-friendly summary (pos, hit_class id/label, is_jake)
@@ -1186,12 +1257,6 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
 
             else:
                 if IMPACT_TOKEN == new_token:
-                    # If the previous timer already fired (no longer alive), allow immediate re-arm
-                    if not (IMPACT_TIMER and getattr(IMPACT_TIMER, "is_alive", lambda: False)()):
-                        _arm_impact_timer(float(dist_px), int(jake_cls))
-                        IMPACT_TOKEN = new_token
-                    # else: keep the existing live timer
-
                     # Same situation → do nothing (no cancel, no re-arm), even if dist jitters/out of window
                     pass
                 else:
@@ -1446,67 +1511,34 @@ def render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
 # =======================
 # Live loop
 # =======================
-
-save_frames = False
-
-# =======================
 listener = keyboard.Listener(on_press=on_press)
 listener.start()
 
 sct = mss()
 frame_idx = 0
 
-from mss import mss
-
-if advertisement:
-    CHECK_X, CHECK_Y = 1030, 900
-else:
-    CHECK_X, CHECK_Y = 870, 895
-
 while running:
-    frame_start_time = time.perf_counter()
 
     _now = time.monotonic()
     if _now < PAUSE_UNTIL:
         time.sleep(PAUSE_UNTIL - _now)
         continue
-
     frame_idx += 1
-    print('/n')
-    print(f'===================================== Operating on frame {frame_idx} =====================================')
-
-    # --- Screen grab ---
-    t0_grab = time.perf_counter()
+    print(f'===================================== Operating on frame {frame_idx } =====================================')
+    # Screen grab
     left, top, width, height = snap_coords
     raw = sct.grab({"left": left, "top": top, "width": width, "height": height})
     frame_bgr = np.array(raw)[:, :, :3]  # BGRA -> BGR
-    grab_ms = (time.perf_counter() - t0_grab) * 1000.0
 
-    # --- ABSOLUTE SCREEN pixel check ---
-    t0_check = time.perf_counter()
-    arr = np.array(sct.grab({"left": CHECK_X, "top": CHECK_Y, "width": 1, "height": 1}))
-    b, g, r, a = arr[0, 0]
-    TOL = 20
-    target = (61, 156, 93)
-
-    if (abs(b - target[0]) <= TOL and
-        abs(g - target[1]) <= TOL and
-        abs(r - target[2]) <= TOL) or (b, g, r) == (24, 24, 24):
-        print(f"Kill-switch triggered at ({CHECK_X},{CHECK_Y})")
-        running = False
-        keyboard.Key.esc
-        break
-    pixel_check_ms = (time.perf_counter() - t0_check) * 1000.0
-
-    # --- Lane detection ---
-    t0_lane = time.perf_counter()
+    # Dynamic JAKE_POINT from current lane (O(1))
+    # Auto-detect lane by whiteness around the three probes (5x5 box)
     _detected = _detect_lane_by_whiteness(frame_bgr)
     if _detected is not None:
         lane = _detected  # 0/1/2
     JAKE_POINT = LANE_POINTS[lane]
-    lane_ms = (time.perf_counter() - t0_lane) * 1000.0
 
-    # --- Inference ---
+
+    # Inference
     t0_inf = time.perf_counter()
     res_list = model.predict(
         [frame_bgr], task="segment", imgsz=IMG_SIZE, device=device,
@@ -1515,40 +1547,52 @@ while running:
     infer_ms = (time.perf_counter() - t0_inf) * 1000.0
     yres = res_list[0]
 
-    # --- Postproc ---
-    t0_post = time.perf_counter()
+    # Postproc (now returns hit classes + summary)
     (tri_best_xy, tri_count, mask_count, to_cpu_ms, post_ms,
      masks_np, classes_np, rail_mask, green_mask, tri_positions, tri_colours,
      tri_rays, best_idx, best_deg, x_ref,
      tri_hit_classes, tri_summary) = process_frame_post(frame_bgr, yres, JAKE_POINT)
-    postproc_ms = (time.perf_counter() - t0_post) * 1000.0
 
-    total_proc_ms = grab_ms + pixel_check_ms + lane_ms + infer_ms + postproc_ms
 
-    if save_frames:
-        elapsed_no_post = time.perf_counter() - frame_start_time
-        print(f"Frame {frame_idx} WITHOUT POSTPROC WAS: {elapsed_no_post * 1000:.2f} ms")
 
-    if save_frames:
-        t0_overlay = time.perf_counter()
-        overlay = render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
-                                  tri_positions, tri_colours, tri_rays, best_idx, best_deg, x_ref, JAKE_POINT)
+    proc_ms = infer_ms + to_cpu_ms + post_ms
+
+    # LIVE OUTPUT BEHAVIOR
+    if RENDER_OVERLAYS_LIVE:
+        # (old behavior)
+        overlay = render_overlays(
+            frame_bgr, masks_np, classes_np, rail_mask, green_mask,
+            tri_positions, tri_colours, tri_rays, best_idx, best_deg, x_ref, JAKE_POINT
+        )
         out_path = out_dir / f"live_overlay_{frame_idx:05d}.jpg"
-        cv2.imwrite(str(out_path), overlay)
-        overlay_ms = (time.perf_counter() - t0_overlay) * 1000.0
+        try:
+            cv2.imwrite(str(out_path), overlay)
+        except Exception as e:
+            print(f"[LIVE OVERLAY SAVE] {e}")
     else:
-        overlay_ms = 0.0
+        # Save raw frames only (for offline overlay rendering after Esc)
+        if SAVE_RAW_FRAMES:
+            raw_path = RAW_DIR / f"raw_{frame_idx:05d}.png"
+            try:
+                save_q.put_nowait((raw_path, frame_bgr.copy()))
+            except queue.Full:
+                # fall back to blocking write if queue congests
+                cv2.imwrite(str(raw_path), frame_bgr)
 
-    total_elapsed_ms = (time.perf_counter() - frame_start_time) * 1000.0
-
-    # --- Timing summary ---
-    print(
-        f"[TIMINGS] Grab={grab_ms:.2f} ms | PixelChk={pixel_check_ms:.2f} ms | "
-        f"LaneDet={lane_ms:.2f} ms | Inference={infer_ms:.2f} ms | "
-        f"Postproc={postproc_ms:.2f} ms | Overlay={overlay_ms:.2f} ms | "
-        f"TOTAL={total_elapsed_ms:.2f} ms"
-    )
 
 # Cleanup
+# Cleanup: stop listener, drain queue, then offline-render overlays
 listener.join()
+running = False
+
+# flush the async saver
+try:
+    save_q.put(None)  # sentinel
+    save_q.join()
+except Exception:
+    pass
+
+print("[LIVE] Stopped. Starting offline overlay rendering…")
+offline_process_saved_frames()
 print("Script halted.")
+

@@ -232,3 +232,49 @@ Inference lockdown between states after movements for 360ms
 
  BEST_SCORE_ACHIEVED - 2500
 
+Need to add exit bail out now aka PANIC MODE
+
+12/08
+Very specific setup but is the following possible
+Arm32 running bluestacks 5 to runsubway surfers, all while running a script in background which takes frames analyses in less than 
+100ms using alot of compute for inference and then movign the character in gae live in bs with no overhead all in a VM? Is it possivble and how much deos it cost?
+
+Considering our options the 32arm and access to a beefy GPU for a lowish costs is very difficult. 
+I think the best would be to highly optimise our code and ensure very optimal flow of data and saturate my GPU and CPU much much better, also try to cut down in the transmmision time between
+parsec and my local device. Maybe I can link my windows and m1 through parsec using a cable to eliminate latency times and feedback. Swap to a swift architiectue to cut down frame capture from 40ms to 2ms exactly
+
+Planning architiectue for model and model runtime:
+Requirements: 
+
+OS
+-Arm32 to emulate subwaysurfersv1.apk
+-Powerful(ush) GPU to fully saturate for inference 
+-Join Windows to M1 with cable to avoid WAN latency (if not runnung VM)
+
+PIPELINE
+-Use swift or fast language to capture and proccess frames 
+-Highly optimised processing pipeline for hardcode
+
+
+Options: 
+
+Full local -> M1 MPS and Parsec mirroring.
+Run everything local so +50ms parsec for the M1 <-> Windows loop + IDEALLY 20-50ms + travel times 50ms between cloud 
+Running a full VM emulating the game + hooked to a GPU (hardest and expensive but best) Ultralow latency 
+
+BEST_SCORE_ACHIEVED - 2931
+BEST_SCORE_ACHIEVED - 3354
+BEST_SCORE_ACHIEVED - 3666
+
+13/08/25
+
+Need to reaclibrate speed curve for higher speeds. Global timer etc
+Need more gas for post proc inference by spreading and chaining onto GPU 
+
+Need to improve baselie 'smarts' level
+With higher sampling more room for error -> Prone to moving back into the corner of object due to coins 
+Pillas yellow claass poximity to red?
+
+
+
+

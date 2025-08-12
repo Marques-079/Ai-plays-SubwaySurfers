@@ -5,7 +5,7 @@
 # • Arrow keys switch lane (0/1/2) -> JAKE_POINT updates per frame
 # • Full overlay rendering + per-frame save
 # • Prints compact timing per frame
-# • RETURNS per frame: tri_positions, best_idx, tri_hit_classes, tri_summary (for movement logic)
+# • RETURNS per frame: tri_positions, best_idx, tri_hit_classes, tri_summary (for movement logic)GOOGOGOGOGOGOG
 
 import os, time, math, subprocess
 import cv2, torch, numpy as np
@@ -19,6 +19,9 @@ from threading import Thread
 import time
 start_time = time.perf_counter()
 
+# Viz/debug toggles
+RENDER_OVERLAYS = False   # <- turn off to skip all overlay drawing
+SAVE_OVERLAYS   = False   # <- turn off to skip cv2.imwrite
 
 
 # --- swallow AI-generated keypresses in the listener for a short window ---
@@ -143,10 +146,16 @@ def lane_name_from_point(p):
 
 
 # ===== Movement logic (modular) HELPER FUNCTIOSNS==============================================================================================================
+def _ms(seconds):
+    """Convert seconds (float) to milliseconds (float)."""
+    try:
+        return float(seconds) * 1000.0
+    except Exception:
+        return 0.0
 
 
 # --- inference pause gate (after imports/globals) ---
-PAUSE_AFTER_MOVE_S = 0.40
+PAUSE_AFTER_MOVE_S = 0.330
 
 try:
     PAUSE_UNTIL
@@ -165,31 +174,34 @@ try:
 except NameError:
     IMPACT_TOKEN = None  # (lane, class_id)
 
-def _fire_action_key(key: str, token_snapshot):
+def _fire_action_key(key: str):
     global IMPACT_TOKEN
-    if MOVEMENT_ENABLED:
+    if not MOVEMENT_ENABLED:
+        return
+    try:
         pyautogui.press(key)
         print(f"[TIMER FIRE] pressed {key}")
-    # allow instant re-arm for the next identical obstacle
-    if IMPACT_TOKEN == token_snapshot:
+    except Exception as e:
+        print(f"[TIMER FIRE] failed: {e}")
+    finally:
         IMPACT_TOKEN = None
 
 
 # Only arm timer when distance is strictly inside this window (px)
-IMPACT_MIN_PX = 100
+IMPACT_MIN_PX = 400
 IMPACT_MAX_PX = 650
 
 # ===== Impact delay lookup (distance px -> seconds) =====
 # Fill these with your *monotone ascending* distances (px) and corresponding delays (seconds).
 # Example placeholders; REPLACE with your numbers:
-LUT_PX = np.array([100, 125, 150, 175, 200, 225, 250, 275, 300, 325, 350, 375, 400, 425, 450, 475, 500, 525, 550, 575, 600, 625, 650, 675, 700, 725, 750, 775, 800], dtype=float)
+LUT_PX = np.array([200, 225, 250, 275, 300, 325, 350, 375, 400, 425, 450, 475, 500, 525, 550, 575, 600, 625, 650, 675, 700, 725, 750, 775, 800], dtype=float)
 
 SHORTEN_S = 0.35 #Shortnen by 100ms
 # Safety clamps so Timer never explodes or becomes a no-op
 MIN_DELAY_S = 0.03   # 30 ms
 MAX_DELAY_S = 2.00   # 2 s
 
-LUT_S = np.clip(np.array([0.0259, 0.0303, 0.0353, 0.0412, 0.0481, 0.0561, 0.0655, 0.0765, 0.0893, 0.1042, 0.1216, 0.1419, 0.1656, 0.1933, 0.2256, 0.2633, 0.3073, 0.3586, 0.4185, 0.4885, 0.5701, 0.6654, 0.7765, 0.9063, 1.0578, 1.2345, 1.4408, 1.6815, 1.9625], dtype=float) - SHORTEN_S, MIN_DELAY_S, MAX_DELAY_S)
+LUT_S = np.clip(np.array([0.0481, 0.0561, 0.0655, 0.0765, 0.0893, 0.1042, 0.1216, 0.1419, 0.1656, 0.1933, 0.2256, 0.2633, 0.3073, 0.3586, 0.4185, 0.4885, 0.5701, 0.6654, 0.7765, 0.9063, 1.0578, 1.2345, 1.4408, 1.6815, 1.9625], dtype=float) - SHORTEN_S, MIN_DELAY_S, MAX_DELAY_S)
 
 
 def first_mask_hit_starburst_then_ray_for_set(
@@ -256,6 +268,10 @@ def first_mask_hit_starburst_then_ray_for_set(
 IMPACT_CLASSES = {2, 3, 4, 5}  # 2:HIGHBARRIER1, 3:JUMP, 4:LOWBARRIER1, 5:LOWBARRIER2
 ACTION_BY_CLASS = {3: "up", 5: "up", 4: "down", 2: "down"}  # per spec
 
+# Only arm timer when distance is strictly inside this window (px)
+IMPACT_MIN_PX = 400
+IMPACT_MAX_PX = 800
+
 # Global timer handle (overwritten when re-arming)
 try:
     IMPACT_TIMER
@@ -296,6 +312,15 @@ def _impact_delay_seconds(dist_px: float) -> float:
     return max(MIN_DELAY_S, min(delay, MAX_DELAY_S))
 
 
+def _fire_action_key(key: str):
+    if not MOVEMENT_ENABLED:
+        return
+    try:
+        pyautogui.press(key)
+        print(f"[TIMER FIRE] pressed {key}")
+    except Exception as e:
+        print(f"[TIMER FIRE] failed: {e}")
+
 def _arm_impact_timer(dist_px: float, cls_id: int):
     """
     Overwrite-or-set the global timer if dist is in (400, 800) px and class is in IMPACT_CLASSES.
@@ -320,20 +345,16 @@ def _arm_impact_timer(dist_px: float, cls_id: int):
         return
 
     # detect whether we are overwriting a live timer
-    # detect whether we are overwriting a live timer
-    global IMPACT_TIMER, IMPACT_TOKEN
+    global IMPACT_TIMER
     was_live = (IMPACT_TIMER is not None and getattr(IMPACT_TIMER, "is_alive", lambda: False)())
 
     _cancel_impact_timer()  # overwrite existing timer if any
 
-    # --- REPLACEMENT: arm with a token so post-fire re-arm is instant ---
-    new_token = (lane, int(cls_id))            # <-- build token for THIS arm
     from threading import Timer
-    IMPACT_TIMER = Timer(delay_s, _fire_action_key, args=(key, new_token))
+    IMPACT_TIMER = Timer(delay_s, _fire_action_key, args=(key,))
     IMPACT_TIMER.daemon = True
     IMPACT_TIMER.start()
 
-    IMPACT_TOKEN = new_token                   # remember what we armed
     status = "updated" if was_live else "armed"
     print(f"[TIMER] {status}: key={key} in {delay_s:.3f}s  (dist={dist_px:.1f}px, cls={LABELS.get(int(cls_id), cls_id)})")
 
@@ -388,7 +409,7 @@ def first_mask_hit_starburst_then_ray(
         ys = _clampi(int(round(y0 + dy * t)), 0, H-1)
         cls_hit = _hit_at(xs, ys)
         if cls_hit is not None:
-            dist = math.hypot(xs - x0, ys - y0)  # Euclidean from Jake
+            dist = math.hypot(xs - x0, ys - y0)
             return (float(dist), (int(xs), int(ys)), int(cls_hit))
 
     # ---- segment 2: continue from triangle along angled probe (same as classify rays)
@@ -476,6 +497,8 @@ def promote_lowbarrier_when_wall(frame_bgr, masks_np, classes_np,
     relabel that instance to ORANGETRAIN (treated as RED).
     """
     if masks_np is None or classes_np is None or masks_np.size == 0:
+        return classes_np
+    if not np.any(classes_np == LOWBARRIER1_ID):
         return classes_np
 
     H, W = frame_bgr.shape[:2]
@@ -841,29 +864,44 @@ def highlight_rails_mask_only_fast(img_bgr, rail_mask):
 
     rail_u8 = rail_mask.view(dtype=np.uint8) * 255
     x, y, w, h = cv2.boundingRect(rail_u8)
+    if w == 0 or h == 0:
+        return np.zeros((H, W), dtype=bool)
+
     img_roi  = img_bgr[y:y+h, x:x+w]
     mask_roi = rail_u8[y:y+h, x:x+w]
 
-    img_f = img_roi.astype(np.float32, copy=False)
-    diff  = img_f[:, :, None, :] - TARGETS_BGR_F32[None, None, :, :]
-    dist2 = (diff * diff).sum(-1)
-    colour_hit = (dist2 <= TOL2).any(-1)
+    # Fast color gating with inRange around each target color
+    combined = np.zeros((h, w), dtype=np.uint8)
+    tol = int(TOLERANCE)
+    for (r, g, b) in TARGET_COLORS_RGB:
+        lo = np.array([b - tol, g - tol, r - tol], dtype=np.int16)
+        hi = np.array([b + tol, g + tol, r + tol], dtype=np.int16)
+        lo = np.clip(lo, 0, 255).astype(np.uint8)
+        hi = np.clip(hi, 0, 255).astype(np.uint8)
+        hit = cv2.inRange(img_roi, lo, hi)   # 0/255
+        combined = cv2.bitwise_or(combined, hit)
 
-    combined = np.logical_and(colour_hit, mask_roi.astype(bool))
+    # AND with the rail mask ROI
+    combined = cv2.bitwise_and(combined, mask_roi)
 
-    comp = combined.astype(np.uint8)
-    n, lbls, stats, _ = cv2.connectedComponentsWithStats(comp, 8)
-    if n <= 1: return np.zeros((H, W), dtype=bool)
+    # Keep only decent-sized / tall regions
+    if cv2.countNonZero(combined) == 0:
+        full = np.zeros((H, W), dtype=bool)
+        return full
 
-    good = np.zeros_like(combined)
-    areas = stats[1:, cv2.CC_STAT_AREA]
-    hs    = stats[1:, cv2.CC_STAT_HEIGHT]
-    keep  = np.where((areas >= MIN_REGION_SIZE) & (hs >= MIN_REGION_HEIGHT))[0] + 1
-    for k in keep: good[lbls == k] = True
+    n, lbls, stats, _ = cv2.connectedComponentsWithStats((combined > 0).astype(np.uint8), 8)
+    good = np.zeros_like(combined, dtype=np.uint8)
+    if n > 1:
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        hs    = stats[1:, cv2.CC_STAT_HEIGHT]
+        keep  = np.where((areas >= MIN_REGION_SIZE) & (hs >= MIN_REGION_HEIGHT))[0] + 1
+        for k in keep:
+            good[lbls == k] = 255
 
-    full = np.zeros((H, W), dtype=bool)
+    full = np.zeros((H, W), dtype=np.uint8)
     full[y:y+h, x:x+w] = good
-    return full
+    return (full > 0)
+
 
 def red_vs_green_score(red_mask, green_mask):
     k = (HEAT_BLUR_KSIZE, HEAT_BLUR_KSIZE)
@@ -1066,9 +1104,41 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
     union = np.any(rail_masks, axis=0).astype(np.uint8, copy=False)
     rail_mask = cv2.resize(union, (W, H), interpolation=cv2.INTER_NEAREST).astype(bool, copy=False)
 
-    green = highlight_rails_mask_only_fast(frame_bgr, rail_mask)
-    red   = np.logical_and(rail_mask, np.logical_not(green))
-    score = red_vs_green_score(red, green)
+    # --- ROI accel: do blur/score only where rails exist, then paste back ---
+    rail_u8 = rail_mask.view(dtype=np.uint8) * 255
+    bx, by, bw, bh = cv2.boundingRect(rail_u8)
+    if bw == 0 or bh == 0:
+        # fallback (no rails ROI)
+        green = np.zeros_like(rail_mask, dtype=bool)
+        red   = np.zeros_like(rail_mask, dtype=bool)
+        score = np.zeros((H, W), dtype=np.uint8)
+    else:
+        # small padding to avoid hard edges
+        pad = 8
+        x0 = max(0, bx - pad); y0 = max(0, by - pad)
+        x1 = min(W, bx + bw + pad); y1 = min(H, by + bh + pad)
+
+        # slice ROIs once
+        frame_roi = frame_bgr[y0:y1, x0:x1]
+        rail_roi  = rail_mask[y0:y1, x0:x1]
+
+        # green only on ROI (function already ROIs internally; this just tightens further)
+        green_roi = highlight_rails_mask_only_fast(frame_roi, rail_roi)
+
+        # red/score on ROI, then paste back into full-size arrays
+        red_roi   = np.logical_and(rail_roi, np.logical_not(green_roi))
+        score_roi = red_vs_green_score(red_roi, green_roi)
+
+        # assemble full-size outputs (keeps downstream behavior identical)
+        green = np.zeros_like(rail_mask, dtype=bool)
+        red   = np.zeros_like(rail_mask, dtype=bool)
+        score = np.zeros((H, W), dtype=np.uint8)
+
+        green[y0:y1, x0:x1] = green_roi
+        red[y0:y1,   x0:x1] = red_roi
+        score[y0:y1, x0:x1] = score_roi
+
+    # unchanged: triangle finding runs on the full-size score so visuals/logic stay identical
     tri_positions, tri_best = purple_triangles(score, H)
 
     # Jake triangle by bearing
@@ -1105,28 +1175,6 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
         tri_positions, masks_np, classes_np, H, W, jake_point, x_ref, best_idx,
         SAMPLE_UP_PX, RAY_STEP_PX
     )
-
-    if tri_positions and any(ty >= (H) for _, ty in tri_positions):
-    # compute rail_grad/edge_dist and run the loop
-
-        # --- edge-danger override: triangles too close to rail edges in bottom half ---
-        EDGE_PAD_PX = 50
-
-        # distance-to-rail-edge map (in pixels)
-        rail_grad = cv2.morphologyEx(rail_mask.astype(np.uint8), cv2.MORPH_GRADIENT,
-                                    cv2.getStructuringElement(cv2.MORPH_RECT, (3,3)))
-        # distanceTransform gives distance to the nearest 0; make edges=0, elsewhere=255
-        edge_bg = (rail_grad == 0).astype(np.uint8) * 255
-        edge_dist = cv2.distanceTransform(edge_bg, cv2.DIST_L2, 5)
-
-        # mark triangles as danger if they're within EDGE_PAD_PX of an edge
-        # AND they sit in the bottom half of the screen (y >= H//2)
-        for i, (tx, ty) in enumerate(tri_positions):
-            if ty >= (H // 2) and edge_dist[int(ty), int(tx)] <= EDGE_PAD_PX:
-                tri_colours[i]      = COLOR_RED          # show as red in the overlay
-                tri_hit_classes[i]  = 1                  # any class in DANGER_RED; 1=GREYTRAIN works
-                tri_hit_dists[i]    = 0.0                # optional: treat as immediate
-
 
     post_ms = (time.perf_counter() - t1) * 1000.0
 
@@ -1186,12 +1234,6 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
 
             else:
                 if IMPACT_TOKEN == new_token:
-                    # If the previous timer already fired (no longer alive), allow immediate re-arm
-                    if not (IMPACT_TIMER and getattr(IMPACT_TIMER, "is_alive", lambda: False)()):
-                        _arm_impact_timer(float(dist_px), int(jake_cls))
-                        IMPACT_TOKEN = new_token
-                    # else: keep the existing live timer
-
                     # Same situation → do nothing (no cancel, no re-arm), even if dist jitters/out of window
                     pass
                 else:
@@ -1328,6 +1370,8 @@ def render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
             m_full = m
             if m.shape != (H, W):
                 m_full = cv2.resize(m.astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST).astype(bool)
+            else:
+                m_full = m.astype(bool, copy=False)
             color = CLASS_COLOURS.get(int(c), (255,255,255))
             out[m_full] = (np.array(color, dtype=np.uint8) * alpha + out[m_full] * (1 - alpha)).astype(np.uint8)
             ys, xs = np.where(m_full)
@@ -1357,21 +1401,18 @@ def render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
     xj, yj = jake_point
     for idx, (xt, yt) in enumerate(tri_positions):
         xt = _clampi(int(xt), 0, W-1); yt = _clampi(int(yt), 0, H-1)
-        deg_signed = signed_degrees_from_vertical(xt - xj, yt - yj)
         cv2.line(out, (xj, yj), (xt, yt),
                  COLOR_CYAN if idx == best_idx else COLOR_WHITE, 2, cv2.LINE_AA)
-        mx = (xj + xt) // 2; my = (yj + yt) // 2
 
     # curved sampling rays (viz)
     for (p0, p1, theta) in tri_rays:
         cv2.line(out, p0, p1, (255,255,255), 2, cv2.LINE_AA)
-        mx = (p0[0] + p1[0]) // 2; my = (p0[1] + p1[1]) // 2
 
     for (x, y), col in zip(tri_positions, tri_colours):
         draw_triangle(out, int(x), int(y), colour=col)
 
     lane_name = lane_name_from_point(jake_point)
-    target_deg = LANE_TARGET_DEG[lane_name]
+
     if best_idx is not None and 0 <= best_idx < len(tri_positions):
         xt, yt = tri_positions[best_idx]
 
@@ -1384,12 +1425,11 @@ def render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
             theta_deg=float(theta_deg),
             masks_np=masks_np, classes_np=classes_np, H=H, W=W,
             up2_px=SAMPLE_UP_PX, step_px=2,
-            exclude_classes=(RAIL_ID,),   # skip rails
-            danger_only=False             # set True to only consider DANGER_RED
+            exclude_classes=(RAIL_ID,),
+            danger_only=False
         )
 
         # draw starburst segment (cyan + thicker)
-        xj, yj = jake_point
         cv2.line(out, (xj, yj), (int(xt), int(yt)), COLOR_CYAN, 3, cv2.LINE_AA)
 
         # draw the angled continuation for viz (cyan + thicker)
@@ -1400,7 +1440,6 @@ def render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
 
         # OPTIONAL: cyan outline around the best triangle so it pops
         cv2.polylines(out, [triangle_pts(int(xt), int(yt)).reshape(-1,1,2)], True, COLOR_CYAN, 3, cv2.LINE_AA)
-
 
         if hit_xy is not None:
             cv2.circle(out, hit_xy, 6, (0, 0, 0), -1, cv2.LINE_AA)
@@ -1417,25 +1456,17 @@ def render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
         cv2.putText(out, f"Jake→tri (ray) first-hit: {dist_text}",
                     (max(5, midx - 160), max(24, midy)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1, cv2.LINE_AA)
-        
-        # TIME KEEPING
 
+        # TIME KEEPING (absolute since program start)
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         time_str = f"{elapsed_ms:.3f} ms"
-
-        # position in bottom-right corner
         (text_w, text_h), _ = cv2.getTextSize(time_str, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-        x_pos = out.shape[1] - text_w - 10  # 10px from right edge
-        y_pos = out.shape[0] - 10           # 10px from bottom edge
-
-        # draw text
+        x_pos = out.shape[1] - text_w - 10
+        y_pos = out.shape[0] - 10
         cv2.putText(out, time_str, (x_pos, y_pos),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 2, cv2.LINE_AA)
         cv2.putText(out, time_str, (x_pos, y_pos),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1, cv2.LINE_AA)
-
-        # -------------------------------------------------------------------------------
-
 
     # top-left JAKE_POINT state
     cv2.putText(out, f"JAKE_POINT: {lane_name.upper()}",
@@ -1446,25 +1477,14 @@ def render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
 # =======================
 # Live loop
 # =======================
-
-save_frames = False
-
-# =======================
 listener = keyboard.Listener(on_press=on_press)
 listener.start()
 
 sct = mss()
 frame_idx = 0
 
-from mss import mss
-
-if advertisement:
-    CHECK_X, CHECK_Y = 1030, 900
-else:
-    CHECK_X, CHECK_Y = 870, 895
-
 while running:
-    frame_start_time = time.perf_counter()
+    frame_start = time.perf_counter()
 
     _now = time.monotonic()
     if _now < PAUSE_UNTIL:
@@ -1472,83 +1492,71 @@ while running:
         continue
 
     frame_idx += 1
-    print('/n')
     print(f'===================================== Operating on frame {frame_idx} =====================================')
 
-    # --- Screen grab ---
-    t0_grab = time.perf_counter()
+    # Screen grab
+    grab_t0 = time.perf_counter()
     left, top, width, height = snap_coords
     raw = sct.grab({"left": left, "top": top, "width": width, "height": height})
     frame_bgr = np.array(raw)[:, :, :3]  # BGRA -> BGR
-    grab_ms = (time.perf_counter() - t0_grab) * 1000.0
+    grab_ms = _ms(time.perf_counter() - grab_t0)
 
-    # --- ABSOLUTE SCREEN pixel check ---
-    t0_check = time.perf_counter()
-    arr = np.array(sct.grab({"left": CHECK_X, "top": CHECK_Y, "width": 1, "height": 1}))
-    b, g, r, a = arr[0, 0]
-    TOL = 20
-    target = (61, 156, 93)
-
-    if (abs(b - target[0]) <= TOL and
-        abs(g - target[1]) <= TOL and
-        abs(r - target[2]) <= TOL) or (b, g, r) == (24, 24, 24):
-        print(f"Kill-switch triggered at ({CHECK_X},{CHECK_Y})")
-        running = False
-        keyboard.Key.esc
-        break
-    pixel_check_ms = (time.perf_counter() - t0_check) * 1000.0
-
-    # --- Lane detection ---
-    t0_lane = time.perf_counter()
+    # Dynamic JAKE_POINT from current lane (auto-detect)
+    lane_detect_t0 = time.perf_counter()
     _detected = _detect_lane_by_whiteness(frame_bgr)
     if _detected is not None:
         lane = _detected  # 0/1/2
     JAKE_POINT = LANE_POINTS[lane]
-    lane_ms = (time.perf_counter() - t0_lane) * 1000.0
+    lane_ms = _ms(time.perf_counter() - lane_detect_t0)
 
-    # --- Inference ---
+    # Inference
     t0_inf = time.perf_counter()
     res_list = model.predict(
         [frame_bgr], task="segment", imgsz=IMG_SIZE, device=device,
         conf=CONF, iou=IOU, verbose=False, half=half, max_det=MAX_DET, batch=1
     )
-    infer_ms = (time.perf_counter() - t0_inf) * 1000.0
+    infer_ms = _ms(time.perf_counter() - t0_inf)
     yres = res_list[0]
 
-    # --- Postproc ---
-    t0_post = time.perf_counter()
+    # Postproc
+    post_t0 = time.perf_counter()
     (tri_best_xy, tri_count, mask_count, to_cpu_ms, post_ms,
      masks_np, classes_np, rail_mask, green_mask, tri_positions, tri_colours,
      tri_rays, best_idx, best_deg, x_ref,
      tri_hit_classes, tri_summary) = process_frame_post(frame_bgr, yres, JAKE_POINT)
-    postproc_ms = (time.perf_counter() - t0_post) * 1000.0
+    postproc_ms = _ms(time.perf_counter() - post_t0)  # inclusive of CPU transfer + post
 
-    total_proc_ms = grab_ms + pixel_check_ms + lane_ms + infer_ms + postproc_ms
-
-    if save_frames:
-        elapsed_no_post = time.perf_counter() - frame_start_time
-        print(f"Frame {frame_idx} WITHOUT POSTPROC WAS: {elapsed_no_post * 1000:.2f} ms")
-
-    if save_frames:
-        t0_overlay = time.perf_counter()
+    # Render + (optional) save overlay
+    if RENDER_OVERLAYS:
+        overlay_t0 = time.perf_counter()
         overlay = render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
-                                  tri_positions, tri_colours, tri_rays, best_idx, best_deg, x_ref, JAKE_POINT)
-        out_path = out_dir / f"live_overlay_{frame_idx:05d}.jpg"
-        cv2.imwrite(str(out_path), overlay)
-        overlay_ms = (time.perf_counter() - t0_overlay) * 1000.0
+                                tri_positions, tri_colours, tri_rays, best_idx, best_deg, x_ref, JAKE_POINT)
+        overlay_ms = _ms(time.perf_counter() - overlay_t0)
+
+        if SAVE_OVERLAYS:
+            save_t0 = time.perf_counter()
+            out_path = out_dir / f"live_overlay_{frame_idx:05d}.jpg"
+            cv2.imwrite(str(out_path), overlay)
+            save_ms = _ms(time.perf_counter() - save_t0)
+        else:
+            save_ms = 0.0
     else:
         overlay_ms = 0.0
+        save_ms = 0.0
 
-    total_elapsed_ms = (time.perf_counter() - frame_start_time) * 1000.0
 
-    # --- Timing summary ---
+    total_ms = _ms(time.perf_counter() - frame_start)
+    fps_cur = (1000.0 / total_ms) if total_ms > 0 else 0.0
+
+    # Compact per-frame timing print
     print(
-        f"[TIMINGS] Grab={grab_ms:.2f} ms | PixelChk={pixel_check_ms:.2f} ms | "
-        f"LaneDet={lane_ms:.2f} ms | Inference={infer_ms:.2f} ms | "
-        f"Postproc={postproc_ms:.2f} ms | Overlay={overlay_ms:.2f} ms | "
-        f"TOTAL={total_elapsed_ms:.2f} ms"
+        f"[TIMING] f#{frame_idx:05d} | grab={grab_ms:.2f} | lane={lane_ms:.2f} | "
+        f"infer={infer_ms:.2f} | toCPU={to_cpu_ms:.2f} | post={post_ms:.2f} "
+        f"(incl_call={postproc_ms:.2f}) | overlay={overlay_ms:.2f} | save={save_ms:.2f} | "
+        f"total={total_ms:.2f} -> {fps_cur:.1f} FPS | masks={mask_count} tris={tri_count}"
     )
 
 # Cleanup
 listener.join()
 print("Script halted.")
+
