@@ -275,6 +275,6 @@ Need to improve baselie 'smarts' level
 With higher sampling more room for error -> Prone to moving back into the corner of object due to coins 
 Pillas yellow claass poximity to red?
 
-
+So we have around 120% / 800% cores being used with runV3 and around 35% of our total GPU utlisation. Meaning we have a lot of room for ocmpute expansion
 
 

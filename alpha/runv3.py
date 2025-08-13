@@ -1445,11 +1445,8 @@ def render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
 
 # =======================
 # Live loop
-# =======================
+# =======================   
 
-save_frames = False
-
-# =======================
 listener = keyboard.Listener(on_press=on_press)
 listener.start()
 
@@ -1462,6 +1459,50 @@ if advertisement:
     CHECK_X, CHECK_Y = 1030, 900
 else:
     CHECK_X, CHECK_Y = 870, 895
+
+#===========================================Resource consuption monitoring===========================================
+
+import psutil
+import os
+import subprocess, threading, re
+import subprocess
+import threading
+import re
+
+process = psutil.Process(os.getpid())
+
+def print_system_usage():
+    cpu_percent = psutil.cpu_percent(interval=None)
+    mem_info = process.memory_info()
+    rss_mb = mem_info.rss / (1024 ** 2)  # Resident memory in MB
+    print(f"[SYS] CPU: {cpu_percent:.1f}%  |  RAM: {rss_mb:.1f} MB")
+
+    import subprocess, threading, re
+
+def stream_mps_gpu_stats():
+    # requires sudo; run your script with:  sudo python your_script.py
+    cmd = ["powermetrics", "--samplers", "gpu_power", "-i", "200"]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    busy_re = re.compile(r"GPU Busy\s*=\s*(\d+)%")
+    power_re = re.compile(r"GPU Power\s*=\s*([\d\.]+)\s*W")
+    for line in p.stdout:
+        m1 = busy_re.search(line); m2 = power_re.search(line)
+        if m1 or m2:
+            busy = m1.group(1) if m1 else "?"
+            power = m2.group(1) if m2 else "?"
+            print(f"[GPU] Busy {busy}% | Power {power} W")
+
+# call once before your while-loop:
+threading.Thread(target=stream_mps_gpu_stats, daemon=True).start()
+
+#=====================================================================================================================
+
+# =======================
+
+save_frames = False
+power_metrics = True
+
+# =======================
 
 while running:
     frame_start_time = time.perf_counter()
@@ -1479,12 +1520,19 @@ while running:
     t0_grab = time.perf_counter()
     left, top, width, height = snap_coords
     raw = sct.grab({"left": left, "top": top, "width": width, "height": height})
+
+
+    buf  = np.frombuffer(raw.raw, dtype=np.uint8).reshape(raw.height, raw.width, 4)  # BGRA view
+    print(f"[view] shape: {buf.shape[1]}x{buf.shape[0]} px   (BGRA)")
+
+
     frame_bgr = np.array(raw)[:, :, :3]  # BGRA -> BGR
     grab_ms = (time.perf_counter() - t0_grab) * 1000.0
 
     # --- ABSOLUTE SCREEN pixel check ---
     t0_check = time.perf_counter()
     arr = np.array(sct.grab({"left": CHECK_X, "top": CHECK_Y, "width": 1, "height": 1}))
+
     b, g, r, a = arr[0, 0]
     TOL = 20
     target = (61, 156, 93)
@@ -1540,6 +1588,10 @@ while running:
         overlay_ms = 0.0
 
     total_elapsed_ms = (time.perf_counter() - frame_start_time) * 1000.0
+
+    if power_metrics:
+        print_system_usage()
+
 
     # --- Timing summary ---
     print(
