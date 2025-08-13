@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-# sc_reader.py — ScreenCaptureKit shared-memory reader
-# Reads NV12 frames from /tmp/scap.ring, prints CAP FPS + turnaround stats.
-# Optional NV12→BGR conversion and preview.
-
 import mmap, os, struct, time, statistics
 import numpy as np
 try:
@@ -40,10 +35,19 @@ def main():
     mm = open_ring(RING_PATH)
     magic, ver, slots, pixfmt, W, H, strideY, strideUV, slot_bytes, head_seq = read_header(mm)
     assert magic == 0x534E5247 and ver == 1, "bad ring header"
-    assert pixfmt == 0, "expected NV12 (pixfmt=0)"
-    assert strideY == W and strideUV == W, f"unexpected stride (got {strideY},{strideUV}, expected {W},{W})"
+    assert pixfmt in (0, 1), f"unsupported pixfmt {pixfmt} (0=NV12, 1=BGRA)"
 
-    print(f"Reading NV12 from {RING_PATH} ({W}x{H}), slots={slots}")
+    if pixfmt == 0:
+        # NV12 (Y + interleaved UV), tightly packed to width
+        assert strideY == W and strideUV == W, f"unexpected stride (got {strideY},{strideUV}, expected {W},{W})"
+        print(f"Reading NV12 from {RING_PATH} ({W}x{H}), slots={slots}")
+    else:
+        # BGRA single-plane; strideY carries row-bytes (w*4) written by producer
+        assert strideY == W * 4, f"unexpected BGRA stride (got {strideY}, expected {W*4})"
+        print(f"Reading BGRA from {RING_PATH} ({W}x{H}), slots={slots}")
+
+    if cv2 is None:
+        raise RuntimeError("This test path requires OpenCV. Please `pip install opencv-python`.")
 
     last_seq     = -1
     ages_ms      = []
@@ -69,23 +73,31 @@ def main():
                 time.sleep(0.0002)
                 continue
 
-            # Zero-copy NV12 views (Y then UV), each tightly packed to W columns
-            y  = np.ndarray((H,    W), dtype=np.uint8, buffer=mm, offset=off_data)
-            uv = np.ndarray((H//2, W), dtype=np.uint8, buffer=mm, offset=off_data + H*W)
-            yuv = np.vstack([y, uv])  # (H*3//2, W)
+            # -----------------------------
+            # Build BGR like mss() → numpy
+            # -----------------------------
+            if pixfmt == 0:
+                # NV12 path: construct stacked NV12 view then convert to BGR
+                y  = np.ndarray((H,    W), dtype=np.uint8, buffer=mm, offset=off_data)
+                uv = np.ndarray((H//2, W), dtype=np.uint8, buffer=mm, offset=off_data + H*W)
+                yuv = np.vstack([y, uv])  # (H*3//2, W)
 
-            if RETURN_BGR:
-                if cv2 is None:
-                    raise RuntimeError("RETURN_BGR=True requires `pip install opencv-python`.")
-                bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
-                if PREVIEW:
-                    cv2.imshow("SCStream ROI (BGR)", bgr)
-                    if cv2.waitKey(1) == 27:  # Esc
-                        break
-            elif PREVIEW and cv2 is not None:
-                # Cheap luma preview without conversion
-                cv2.imshow("SCStream ROI (Y)", y)
-                if cv2.waitKey(1) == 27:
+                t0c = time.perf_counter()
+                bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)  # (H,W,3), uint8
+                convert_ms = (time.perf_counter() - t0c) * 1000.0
+
+            else:
+                # BGRA path: take zero-copy view and drop alpha
+                bgra = np.ndarray((H, W, 4), dtype=np.uint8, buffer=mm, offset=off_data)
+                # Mimic "mss -> np.array(shot)[:, :, :3]" (BGR) without copy
+                t0c = time.perf_counter()
+                bgr = bgra[..., :3]  # view, (H,W,3)
+                convert_ms = (time.perf_counter() - t0c) * 1000.0  # ~0.00 ms
+
+            # Optional preview of the true BGR frame
+            if PREVIEW:
+                cv2.imshow("SCStream ROI (BGR)", bgr)
+                if cv2.waitKey(1) == 27:  # Esc
                     break
 
             # Turnaround: capture→now age using producer timestamp
@@ -93,7 +105,7 @@ def main():
             ages_ms.append(age_ms)
             last_seq = head_seq
 
-            # Once per PRINT_EVERY seconds: print CAP fps + latency stats
+            # Once per PRINT_EVERY seconds: print CAP fps + latency stats + conversion cost
             now = time.perf_counter()
             if now - last_print >= PRINT_EVERY:
                 cap_fps = (head_seq - cap_last_seq) / (now - cap_last_t) if now > cap_last_t else float("nan")
@@ -107,8 +119,10 @@ def main():
                 else:
                     med = p95 = worst = float('nan')
 
+                kind = "NV12->BGR (cv2)" if pixfmt == 0 else "BGRA view → BGR slice"
                 print(f"[SCStream] CAP {cap_fps:6.1f} fps | "
-                      f"TURNAROUND median {med:6.2f} ms  p95 {p95:6.2f} ms  max {worst:6.2f} ms   (ROI {W}x{H})")
+                      f"TURNAROUND median {med:6.2f} ms  p95 {p95:6.2f} ms  max {worst:6.2f} ms   "
+                      f"(ROI {W}x{H}) | [convert] {kind}: +{convert_ms:5.2f} ms")
 
                 ages_ms.clear()
                 last_print = now
@@ -125,8 +139,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-
-'''
-After you activate the SCStream producer, run this script to read frames in a DIFFERENT terminal:
-'''
-#python3 sc_reader.py

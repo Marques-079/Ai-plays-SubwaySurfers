@@ -277,4 +277,27 @@ Pillas yellow claass poximity to red?
 
 So we have around 120% / 800% cores being used with runV3 and around 35% of our total GPU utlisation. Meaning we have a lot of room for ocmpute expansion
 
+#sudo powermetrics --samplers gpu_power -i 200 for GPU usage although Activity Monitor MacOS also has a more accurate read on GPU utilisation
+
+=======DEBUG FOR SHARE MEMORY RING=========
+swiftc -O -parse-as-library -framework ScreenCaptureKit -framework AVFoundation -o scgrab scgrab.swift
+
+pkill -f scgrab 2>/dev/null || true
+pkill -f sc_reader.py 2>/dev/null || true
+
+rm -f /tmp/scap.ring
+
+tccutil reset ScreenCapture com.microsoft.VSCode
+
+./scgrab --x 0 --y 0 --w 1010 --h 1812 --fps 120 --out /tmp/scap.ring --slots 3.  <---OLD 
+./scgrab --x 644 --y 77 --w 504 --h 906 --fps 120 --out /tmp/scap.ring --slots 3. <---Latest
+
+
+python3 sc_reader.py
+python3 sc_grab10.py /tmp/scap.ring ./sc_frames_test
+
+==========================================
+
+
+
 

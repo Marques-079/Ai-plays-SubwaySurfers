@@ -8,6 +8,11 @@ import AVFoundation
 import ScreenCaptureKit
 import Darwin
 
+// ------- Keep these alive for the lifetime of the process -------
+fileprivate var gStream: SCStream?
+fileprivate var gOutput: Output?
+fileprivate var gRing:   Ring?
+
 // ------- CLI options -------
 struct Opts {
     var x = 0, y = 0, w = 640, h = 480, fps = 60, slots = 3
@@ -18,12 +23,12 @@ func parseArgs() -> Opts {
     var it = CommandLine.arguments.dropFirst().makeIterator()
     while let k = it.next() {
         switch k {
-        case "--x":   o.x = Int(it.next()!)!
-        case "--y":   o.y = Int(it.next()!)!
-        case "--w":   o.w = Int(it.next()!)!
-        case "--h":   o.h = Int(it.next()!)!
-        case "--fps": o.fps = Int(it.next()!)!
-        case "--out": o.out = it.next()!
+        case "--x":     o.x = Int(it.next()!)!
+        case "--y":     o.y = Int(it.next()!)!
+        case "--w":     o.w = Int(it.next()!)!
+        case "--h":     o.h = Int(it.next()!)!
+        case "--fps":   o.fps = Int(it.next()!)!
+        case "--out":   o.out = it.next()!
         case "--slots": o.slots = Int(it.next()!)!
         default: break
         }
@@ -33,16 +38,16 @@ func parseArgs() -> Opts {
 
 // ------- Shared-memory ring (packed, little-endian) -------
 struct GlobalHeader {
-    var magic: UInt32 = 0x534E5247 // 'GRNS'
+    var magic:   UInt32 = 0x534E5247 // 'GRNS'
     var version: UInt32 = 1
-    var slots: UInt32
-    var pixfmt: UInt32   // 0 = NV12
-    var width:  UInt32
-    var height: UInt32
-    var strideY: UInt32  // packed to width
-    var strideUV: UInt32 // packed to width
-    var slotSize: UInt64 // bytes of Y + UV
-    var headSeq:  UInt64 // latest written seq
+    var slots:   UInt32
+    var pixfmt:  UInt32   // 0 = NV12
+    var width:   UInt32
+    var height:  UInt32
+    var strideY: UInt32   // packed to width
+    var strideUV:UInt32   // packed to width
+    var slotSize:UInt64   // bytes of Y + UV
+    var headSeq: UInt64   // latest written seq
 }
 struct SlotHeader {
     var seqStart: UInt64 = 0
@@ -71,10 +76,14 @@ final class Ring {
 
         fd = open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         ftruncate(fd, off_t(total))
-        guard let p = mmap(nil, total, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0) else {
+
+        // ---- Correct mmap check on Darwin ----
+        let p = mmap(nil, total, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0)
+        guard p != MAP_FAILED else {
+            perror("mmap")
             fatalError("mmap failed")
         }
-        ptr = UnsafeMutableRawPointer(p)
+        ptr = p!
 
         var gh = GlobalHeader(
             slots: UInt32(slots), pixfmt: 0,
@@ -132,16 +141,18 @@ final class Ring {
 final class Output: NSObject, SCStreamOutput {
     let ring: Ring
     let w: Int, h: Int
+    private var frames = 0
+    private var lastReport = DispatchTime.now().uptimeNanoseconds
+
     init(ring: Ring, w: Int, h: Int) { self.ring = ring; self.w = w; self.h = h }
 
     func stream(_ stream: SCStream,
                 didOutputSampleBuffer sb: CMSampleBuffer,
                 of type: SCStreamOutputType) {
-        guard type == SCStreamOutputType.screen,
+        guard type == .screen,
               let imgBuf = CMSampleBufferGetImageBuffer(sb) else { return }
-        // Bind CVImageBuffer -> CVPixelBuffer (always valid for screen frames)
-        let pb: CVPixelBuffer = imgBuf
 
+        let pb: CVPixelBuffer = imgBuf
         CVPixelBufferLockBaseAddress(pb, .readOnly)
         let yBase = CVPixelBufferGetBaseAddressOfPlane(pb, 0)!
         let uvBase = CVPixelBufferGetBaseAddressOfPlane(pb, 1)!
@@ -149,6 +160,15 @@ final class Output: NSObject, SCStreamOutput {
         let uvStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
         ring.writeNV12(yPlane: yBase, yStride: yStride, uvPlane: uvBase, uvStride: uvStride)
         CVPixelBufferUnlockBaseAddress(pb, .readOnly)
+
+        // 1-sec heartbeat (helps debug when "nothing happens")
+        frames += 1
+        let now = DispatchTime.now().uptimeNanoseconds
+        if now - lastReport > 1_000_000_000 {
+            print("[producer] wrote \(frames) frames in the last second")
+            frames = 0
+            lastReport = now
+        }
     }
 }
 
@@ -158,14 +178,13 @@ struct App {
     static func main() {
         let o = parseArgs()
 
-        // Do async ScreenCaptureKit setup on the main queue, then keep the process alive.
         Task {
             do {
-                // Choose a display (first is fine; customize if needed)
+                // Pick first display
                 let content = try await SCShareableContent.current
                 guard let display = content.displays.first else { fatalError("No display found") }
 
-                // Configure SCStream: exact ROI + NV12
+                // Configure stream: NV12 + exact ROI
                 let cfg = SCStreamConfiguration()
                 cfg.width  = o.w
                 cfg.height = o.h
@@ -175,23 +194,27 @@ struct App {
                 cfg.capturesAudio = false
                 cfg.sourceRect = CGRect(x: o.x, y: o.y, width: o.w, height: o.h)
 
-                // Filter: whole display (no app/window exclusions)
+                // Whole-display filter
                 let filter = SCContentFilter(display: display,
                                              excludingApplications: [],
                                              exceptingWindows: [])
 
+                // Stream + output
                 let stream = SCStream(filter: filter, configuration: cfg, delegate: nil)
-
-                // Shared-memory ring for frames
-                let ring = Ring(path: o.out, slots: o.slots, w: o.w, h: o.h)
+                let ring   = Ring(path: o.out, slots: o.slots, w: o.w, h: o.h)
                 let output = Output(ring: ring, w: o.w, h: o.h)
 
-                try stream.addStreamOutput(output,
-                                           type: SCStreamOutputType.screen,
-                                           sampleHandlerQueue: DispatchQueue.main)
+                // Use a dedicated queue (avoid main-queue stalls)
+                let outQ = DispatchQueue(label: "sc.output.q")
+                try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: outQ)
 
                 try await stream.startCapture()
                 print("SCStream running: ROI \(o.w)x\(o.h) @\(o.fps) → \(o.out) (slots \(o.slots))")
+
+                // Retain objects globally so they don't deallocate
+                gRing   = ring
+                gOutput = output
+                gStream = stream
 
             } catch {
                 fputs("Error: \(error)\n", stderr)
@@ -199,7 +222,7 @@ struct App {
             }
         }
 
-        // Keep the process alive on the main thread/queue
+        // Keep the process alive
         dispatchMain()
     }
 }
