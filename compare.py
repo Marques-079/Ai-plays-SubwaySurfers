@@ -47,7 +47,9 @@ print('For NEW PIPELINE')
 print(f"[view] shape: {frame_bgr_2.shape[1]}x{frame_bgr_2.shape[0]} px   (BGR)   seq={meta['seq']}")
 
 
-# if frame_bgr_1 == frame_bgr_2:
-#     print("Frames match!")
-# else:
-#     print("Frames differ!")
+if (frame_bgr_1.shape == frame_bgr_2.shape and
+    frame_bgr_1.dtype  == frame_bgr_2.dtype and
+    np.array_equal(frame_bgr_1, frame_bgr_2)):
+    print("identical")
+else:
+    print("Frames differ!")

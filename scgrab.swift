@@ -12,7 +12,9 @@ fileprivate var gRing:   Ring?
 struct Opts {
     var x = 0, y = 0, w = 640, h = 480, fps = 60, slots = 3
     var out = "/tmp/scap.ring"
+    var scale: Double = 2.0   // <-- new: default to 2× to match mss()
 }
+
 func parseArgs() -> Opts {
     var o = Opts()
     var it = CommandLine.arguments.dropFirst().makeIterator()
@@ -25,6 +27,7 @@ func parseArgs() -> Opts {
         case "--fps":   o.fps = Int(it.next()!)!
         case "--out":   o.out = it.next()!
         case "--slots": o.slots = Int(it.next()!)!
+        case "--scale": o.scale = Double(it.next()!)!   // <-- new
         default: break
         }
     }
@@ -179,34 +182,43 @@ struct App {
                 let content = try await SCShareableContent.current
                 guard let display = content.displays.first else { fatalError("No display found") }
 
-                // Configure stream: NV12 + exact ROI
+                // ---- scale output only; keep ROI in points ----
+                func even(_ v: Int) -> Int { v & ~1 }  // NV12 needs even W/H
+
+                let s = o.scale
+
+                // ROI in points (do NOT scale x/y/w/h)
+                let roiX = o.x
+                let roiY = o.y
+                let roiW = o.w
+                let roiH = o.h
+
+                // Output size in pixels (scale)
+                let outW = even(Int((Double(roiW) * s).rounded()))
+                let outH = even(Int((Double(roiH) * s).rounded()))
+
                 let cfg = SCStreamConfiguration()
-                cfg.width  = o.w
-                cfg.height = o.h
+                cfg.width  = outW
+                cfg.height = outH
                 cfg.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(o.fps))
-                cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange // NV12
+                cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
                 cfg.showsCursor = false
                 cfg.capturesAudio = false
-                cfg.sourceRect = CGRect(x: o.x, y: o.y, width: o.w, height: o.h)
+                cfg.sourceRect = CGRect(x: roiX, y: roiY, width: roiW, height: roiH) // <-- unscaled
 
-                // Whole-display filter
-                let filter = SCContentFilter(display: display,
-                                             excludingApplications: [],
-                                             exceptingWindows: [])
-
-                // Stream + output
+                let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
                 let stream = SCStream(filter: filter, configuration: cfg, delegate: nil)
-                let ring   = Ring(path: o.out, slots: o.slots, w: o.w, h: o.h)
-                let output = Output(ring: ring, w: o.w, h: o.h)
 
-                // Use a dedicated queue (avoid main-queue stalls)
+                let ring   = Ring(path: o.out, slots: o.slots, w: outW, h: outH) // <-- use scaled size here
+                let output = Output(ring: ring, w: outW, h: outH)
+
                 let outQ = DispatchQueue(label: "sc.output.q")
                 try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: outQ)
 
                 try await stream.startCapture()
-                print("SCStream running: ROI \(o.w)x\(o.h) @\(o.fps) → \(o.out) (slots \(o.slots))")
+                print("SCStream running: ROI \(roiW)x\(roiH) → out \(outW)x\(outH) @\(o.fps) (scale \(s)x)")
 
-                // Retain objects globally so they don't deallocate
+
                 gRing   = ring
                 gOutput = output
                 gStream = stream
@@ -217,7 +229,6 @@ struct App {
             }
         }
 
-        // Keep the process alive
         dispatchMain()
     }
 }

@@ -1,3 +1,13 @@
+Models:
+-> alpha
+runv3.py : legacy model, stable logic, mss grab
+runv4.py : compute analysis, toggle frame saves
+runv5.py : shared ring memory, slight recallibration of parameters + auto shutdown and killswitch
+scgrab : swift compiled for shared memory ring + needs to be booted for shared memory (./scgrab --x 644 --y 77 --w 505 --h 906 --fps 60 --out /tmp/scap.ring --slots 3 --scale 2 )
+ring_grab.py : pull single frame from shared memory
+
+<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
 hmmm wait so then cant we be greedy with our auto labeller? 
 picking only the best state in the moment? Becuase when we train our transformer 
 we give context 16ish frames and we predict what needs to happen in the given moment, 
@@ -290,7 +300,8 @@ rm -f /tmp/scap.ring
 tccutil reset ScreenCapture com.microsoft.VSCode
 
 ./scgrab --x 0 --y 0 --w 1010 --h 1812 --fps 120 --out /tmp/scap.ring --slots 3.  <---OLD 
-./scgrab --x 644 --y 77 --w 504 --h 906 --fps 120 --out /tmp/scap.ring --slots 3. <---Latest
+./scgrab --x 644 --y 77 --w 504 --h 906 --fps 120 --out /tmp/scap.ring --slots 3. <---OLD
+
 
 
 python3 sc_reader.py
@@ -305,4 +316,11 @@ Save frames with labels included in total time taken
 
 16/08/25
 runv5.py introduces a new frame python/swift pipeline for fast frame retrival and usage
+
+./scgrab --x 644 --y 77 --w 505 --h 906 --fps 60 --out /tmp/scap.ring --slots 3 --scale 2  <----Latest
+
+swiftc -O -parse-as-library scgrab.swift -o scgrab \-framework ScreenCaptureKit -framework AVFoundation  <-- Compiler for dodgin @main error
+
+prone to moving into trains with feint greens 
+TODO: speed gpu for postproc and top logic
 

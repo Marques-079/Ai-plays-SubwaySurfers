@@ -464,8 +464,8 @@ def first_mask_hit_along_segment(jake_point, tri_pos, masks_np, classes_np,
 # --- tunnel wall color gate (HSV) ---
 LOWBARRIER1_ID   = 4
 ORANGETRAIN_ID   = 6
-WALL_STRIP_PX    = 10           # vertical strip height checked just above the barrier
-WALL_MATCH_FRAC  = 0.95         # % of “wall” pixels required to relabel
+WALL_STRIP_PX    = 12          # vertical strip height checked just above the barrier
+WALL_MATCH_FRAC  = 0.90         # % of “wall” pixels required to relabel
 WALL_ORANGE_LO = np.array([5,  80,  60], dtype=np.uint8)   # H,S,V (lo)
 WALL_ORANGE_HI = np.array([35, 255, 255], dtype=np.uint8)  # H,S,V (hi)
 
@@ -971,7 +971,29 @@ def classify_triangles_at_sample_curved(
 
     for idx, (x0, y0) in enumerate(tri_positions):
         theta = pick_bend_angle(jake_point, x0, x_ref, idx, best_idx)
-        dx1, dy1 = TRIG_TABLE[theta]
+
+        # --- NEW: for Jake's triangle only, if we're in LEFT or RIGHT lane,
+        # make the probe an extension of JAKE_POINT -> triangle apex.
+        if idx == best_idx and (jake_point == LANE_LEFT or jake_point == LANE_RIGHT):
+            jx, jy = jake_point
+            dxv = x0 - jx
+            dyv = y0 - jy
+            L = math.hypot(dxv, dyv)
+            if L > 1e-6:
+                # normalize the true Jake->tri direction
+                dx1 = dxv / L
+                dy1 = dyv / L
+                # keep a theta value for overlays/first-hit; store the exact vector under that key
+                theta = round(signed_degrees_from_vertical(dxv, dyv), 3)
+                TRIG_TABLE[theta] = (dx1, dy1)
+            else:
+                # degenerate: fall back to straight up
+                theta = 0.0
+                dx1, dy1 = TRIG_TABLE[theta]
+        else:
+            # all other triangles keep the old bending behavior
+            dx1, dy1 = TRIG_TABLE[theta]
+
 
         hit_colour = COLOR_GREEN
         hit_cls = None
@@ -1500,7 +1522,7 @@ threading.Thread(target=stream_mps_gpu_stats, daemon=True).start()
 
 # =======================
 
-save_frames = True
+save_frames = False
 power_metrics = True
 
 # =======================
@@ -1526,7 +1548,7 @@ while running:
     grab_ms = (time.perf_counter() - t0_grab) * 1000.0
 
     # same style of debug print
-    print(f"[view] shape: {frame_bgr.shape[1]}x{frame_bgr.shape[0]} px   (BGR)   seq={meta['seq']}")
+    #print(f"[view] shape: {frame_bgr.shape[1]}x{frame_bgr.shape[0]} px   (BGR)   seq={meta['seq']}")
 
     # --- ABSOLUTE SCREEN pixel check ---
     t0_check = time.perf_counter()
