@@ -18,6 +18,7 @@ from threading import Timer
 from threading import Thread
 import time
 start_time = time.perf_counter()
+from ring_grab import get_frame_bgr_from_ring  # or place the helper above and import nothing
 
 
 
@@ -1513,22 +1514,19 @@ while running:
         continue
 
     frame_idx += 1
-    print('/n')
+    print()
     print(f'===================================== Operating on frame {frame_idx} =====================================')
 
     # --- Screen grab ---
     t0_grab = time.perf_counter()
     left, top, width, height = snap_coords
-    raw = sct.grab({"left": left, "top": top, "width": width, "height": height})
-
-
-    buf  = np.frombuffer(raw.raw, dtype=np.uint8).reshape(raw.height, raw.width, 4)  # BGRA view
-    print(f"[view] shape: {buf.shape[1]}x{buf.shape[0]} px   (BGRA)")
-
-
-    frame_bgr = np.array(raw)[:, :, :3]  # BGRA -> BGR
-    print(f"[view] shape: {frame_bgr.shape[1]}x{frame_bgr.shape[0]} px   (BGR)")
+   
+   # NEW (ring)
+    frame_bgr, meta = get_frame_bgr_from_ring(path="/tmp/scap.ring", wait_new=True, timeout_s=0.5)  # HxWx3, uint8, contiguous
     grab_ms = (time.perf_counter() - t0_grab) * 1000.0
+
+    # same style of debug print
+    print(f"[view] shape: {frame_bgr.shape[1]}x{frame_bgr.shape[0]} px   (BGR)   seq={meta['seq']}")
 
     # --- ABSOLUTE SCREEN pixel check ---
     t0_check = time.perf_counter()

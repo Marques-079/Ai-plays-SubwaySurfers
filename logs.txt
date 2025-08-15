@@ -298,6 +298,11 @@ python3 sc_grab10.py /tmp/scap.ring ./sc_frames_test
 
 ==========================================
 
+14/08/25
+
+Save frames with labels included in total time taken 
 
 
+16/08/25
+runv5.py introduces a new frame python/swift pipeline for fast frame retrival and usage
 

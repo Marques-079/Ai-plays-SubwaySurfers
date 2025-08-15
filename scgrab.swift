@@ -1,8 +1,3 @@
-// scgrab.swift
-// Build: swiftc -O -parse-as-library -framework ScreenCaptureKit -framework AVFoundation -o scgrab scgrab.swift
-// Run  : ./scgrab --x 0 --y 0 --w 1010 --h 1812 --fps 120 --out /tmp/scap.ring --slots 3
-// Note : macOS 12.3+; grant Screen Recording permission when prompted.
-
 import Foundation
 import AVFoundation
 import ScreenCaptureKit
