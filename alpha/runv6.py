@@ -21,6 +21,74 @@ start_time = time.perf_counter()
 from ring_grab import get_frame_bgr_from_ring  # or place the helper above and import nothing
 
 
+# purple triangles funciton config
+_SE_OPEN_5x9 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
+
+
+# ---------- decision logging ----------
+DECISIONS_VERBOSE = True
+
+def dlog(tag: str, **kv):
+    """Compact one-liner logs for decisions/actions."""
+    if not DECISIONS_VERBOSE:
+        return
+    ts = time.perf_counter()
+    payload = " ".join(f"{k}={v}" for k, v in kv.items() if v is not None)
+    print(f"[DECIDE] t={ts:.6f} {tag} {payload}")
+# --------------------------------------
+
+
+# === micro-profiler (drop-in) =========================================
+from collections import OrderedDict
+_PROF_CUR = OrderedDict()
+
+def _prof_reset():
+    _PROF_CUR.clear()
+
+PROF_PRINT_IMMEDIATE = False  # toggle
+
+def _record_prof(label, t0):
+    dt = (time.perf_counter() - t0) * 1000.0
+    _PROF_CUR[label] = dt
+    if PROF_PRINT_IMMEDIATE:
+        print(f"[PROF] {label}: {dt:.2f} ms")
+
+
+def __PROF(label: str):
+    """Usage: __p = __PROF('tag');  ...work... ; __p()"""
+    t0 = time.perf_counter()
+    return lambda: _record_prof(label, t0)
+
+def prof_summary(frame_idx: int):
+    if not _PROF_CUR:
+        print(f"[PROF_SUM] frame {frame_idx}: (no samples)")
+        return
+    total = sum(_PROF_CUR.values())
+    print(f"[PROF_SUM] frame {frame_idx}: total={total:.2f} ms")
+    for k, v in _PROF_CUR.items():
+        print(f"   {k:<36} {v:7.2f} ms")
+# ======================================================================
+
+_RGS_CACHE = {"shape": None}
+def _rgs_ensure(H, W):
+    if _RGS_CACHE.get("shape") != (H, W):
+        _RGS_CACHE["shape"] = (H, W)
+        _RGS_CACHE["r32"]   = np.empty((H, W), np.float32)
+        _RGS_CACHE["g32"]   = np.empty((H, W), np.float32)
+        _RGS_CACHE["diff"]  = np.empty((H, W), np.float32)
+        _RGS_CACHE["norm"]  = np.empty((H, W), np.float32)
+        _RGS_CACHE["u8"]    = np.empty((H, W), np.uint8)
+
+def _as_u8_view(a: np.ndarray) -> np.ndarray:
+    """Zero-copy bool->uint8 view when possible; else cheap fallback."""
+    if a.dtype == np.bool_:
+        v = a.view(np.uint8)  # 0/1 bytes, no copy
+    elif a.dtype == np.uint8:
+        v = a
+    else:
+        v = a.astype(np.uint8, copy=False)  # already small; avoids extra copy if possible
+    return v if v.flags["C_CONTIGUOUS"] else np.ascontiguousarray(v)
+
 
 # --- swallow AI-generated keypresses in the listener for a short window ---
 SYNTHETIC_SUPPRESS_S = 0.15  # 150 ms is plenty
@@ -76,6 +144,12 @@ weights    = f"{home}/models/jakes-loped/jakes-finder-mk1/1/weights.pt"
 # SAVE HERE
 out_dir    = Path(home) / "Documents" / "GitHub" / "Ai-plays-SubwaySurfers" / "out_live_overlays"
 out_dir.mkdir(parents=True, exist_ok=True)
+
+# --- Replay dump setup (sibling to out_live_overlays) ---
+REPLAYS_DIR = out_dir.parent / "replays"
+REPLAYS_DIR.mkdir(parents=True, exist_ok=True)
+NEON_GREEN = (57, 255, 20)  # BGR neon green
+
 
 # Crop + click (set by ad layout)
 advertisement = True
@@ -588,6 +662,7 @@ def first_red_hit_y(pos, masks_np, classes_np, H, W, band_px=6, step_px=5, max_u
     if masks_np is None or masks_np.size == 0: return None
     mh, mw = masks_np.shape[1], masks_np.shape[2]
     sx = (mw - 1) / max(1, (W - 1)); sy = (mh - 1) / max(1, (H - 1))
+    
     red_idx = [i for i, c in enumerate(classes_np) if int(c) in DANGER_RED]
     if not red_idx: return None
 
@@ -836,76 +911,152 @@ except Exception:
 # Fast rails green finder
 # =======================
 def highlight_rails_mask_only_fast(img_bgr, rail_mask):
+    __p_fn = __PROF('post.fn.highlight_rails')
     H, W = rail_mask.shape
     if not rail_mask.any():
         return np.zeros((H, W), dtype=bool)
 
-    rail_u8 = rail_mask.view(dtype=np.uint8) * 255
+    # 0/255, single channel for cv2.boundingRect (same semantics as before)
+    rail_u8 = rail_mask.astype(np.uint8, copy=False) * 255
+
+    __p_rect = __PROF('post.highlight.boundingRect')
     x, y, w, h = cv2.boundingRect(rail_u8)
+    __p_rect()
+
     img_roi  = img_bgr[y:y+h, x:x+w]
-    mask_roi = rail_u8[y:y+h, x:x+w]
+    mask_roi = rail_u8[y:y+h, x:x+w]  # still 0/255
 
-    img_f = img_roi.astype(np.float32, copy=False)
-    diff  = img_f[:, :, None, :] - TARGETS_BGR_F32[None, None, :, :]
-    dist2 = (diff * diff).sum(-1)
-    colour_hit = (dist2 <= TOL2).any(-1)
+    # --- EXACT colour test, but cheaper --------------------------------------
+    # Integer arithmetic is exact for our ranges; float32 was exact too, so
+    # the <= TOL2 comparison produces identical booleans.
+    __p_color = __PROF('post.highlight.color_distance')
+    img_i16 = img_roi.astype(np.int16, copy=False)           # [-32768..32767]
+    # Targets in BGR as int16 (same values as your TARGETS_BGR_F32)
+    targets_i16 = TARGETS_BGR_F32.astype(np.int16, copy=False)
+    tol2_i = int(TOL2)
 
-    combined = np.logical_and(colour_hit, mask_roi.astype(bool))
+    # OR together the per-target hits (keeps output identical to ".any(-1)")
+    colour_hit = np.zeros((h, w), dtype=bool)
+    for c in targets_i16:  # typically just 2 colours
+        # per-channel diffs as int32 to avoid overflow when squaring
+        db = img_i16[..., 0].astype(np.int32) - int(c[0])
+        dg = img_i16[..., 1].astype(np.int32) - int(c[1])
+        dr = img_i16[..., 2].astype(np.int32) - int(c[2])
+        dist2 = db * db + dg * dg + dr * dr
+        colour_hit |= (dist2 <= tol2_i)
+    __p_color()
 
-    comp = combined.astype(np.uint8)
+    # Combine with the rail ROI exactly as before
+    combined = np.logical_and(colour_hit, mask_roi.astype(bool, copy=False))
+
+    comp = combined.astype(np.uint8, copy=False)  # 0/1 is fine for CC
+
+    __p_cc = __PROF('post.highlight.cc_stats')
     n, lbls, stats, _ = cv2.connectedComponentsWithStats(comp, 8)
-    if n <= 1: return np.zeros((H, W), dtype=bool)
+    __p_cc()
 
-    good = np.zeros_like(combined)
+    if n <= 1:
+        __p_fn()
+        return np.zeros((H, W), dtype=bool)
+
     areas = stats[1:, cv2.CC_STAT_AREA]
     hs    = stats[1:, cv2.CC_STAT_HEIGHT]
-    keep  = np.where((areas >= MIN_REGION_SIZE) & (hs >= MIN_REGION_HEIGHT))[0] + 1
-    for k in keep: good[lbls == k] = True
 
+    __p_filt = __PROF('post.highlight.filter_regions')
+    keep_idx = np.where((areas >= MIN_REGION_SIZE) & (hs >= MIN_REGION_HEIGHT))[0] + 1
+    # Vectorized label selection (exact same result as the Python loop)
+    good = np.isin(lbls, keep_idx)
     full = np.zeros((H, W), dtype=bool)
     full[y:y+h, x:x+w] = good
+    __p_filt()
+
+    __p_fn()
     return full
 
+#GOOGOGOODGOODOD
+
 def red_vs_green_score(red_mask, green_mask):
-    k = (HEAT_BLUR_KSIZE, HEAT_BLUR_KSIZE)
-    r = cv2.blur(red_mask.astype(np.float32, copy=False), k)
-    g = cv2.blur(green_mask.astype(np.float32, copy=False), k)
-    diff = r - g
-    amax = float(np.max(np.abs(diff))) + 1e-6
-    norm = (diff / (2.0 * amax) + 0.5)
-    return np.clip(norm * 255.0, 0, 255.0).astype(np.uint8, copy=False)
+    ksz = (HEAT_BLUR_KSIZE, HEAT_BLUR_KSIZE)
+    H, W = red_mask.shape[:2]
+    _rgs_ensure(H, W)
+
+    r32   = _RGS_CACHE["r32"]
+    g32   = _RGS_CACHE["g32"]
+    diff  = _RGS_CACHE["diff"]
+    norm  = _RGS_CACHE["norm"]
+    out_u8= _RGS_CACHE["u8"]
+
+    # boxFilter == blur; ddepth=CV_32F gives the same float32 result as your original
+    red_u8   = _as_u8_view(red_mask)
+    green_u8 = _as_u8_view(green_mask)
+    cv2.boxFilter(red_u8,   ddepth=cv2.CV_32F, ksize=ksz, dst=r32,   normalize=True, borderType=cv2.BORDER_DEFAULT)
+    cv2.boxFilter(green_u8, ddepth=cv2.CV_32F, ksize=ksz, dst=g32,   normalize=True, borderType=cv2.BORDER_DEFAULT)
+
+    # diff = r - g (exact)
+    cv2.subtract(r32, g32, diff)
+
+    # amax = max(abs(diff)) + 1e-6 (exactly matches np.max(np.abs(diff)) + 1e-6)
+    mn, mx, _, _ = cv2.minMaxLoc(diff)
+    amax = max(abs(mn), abs(mx)) + 1e-6
+
+    # norm = (diff / (2*amax) + 0.5) * 255, then clip and truncate to uint8
+    cv2.multiply(diff, 1.0 / (2.0 * amax), norm)  # norm = diff * scale
+    cv2.add(norm, 0.5, norm)
+    cv2.multiply(norm, 255.0, norm)
+    cv2.max(norm, 0.0, norm); cv2.min(norm, 255.0, norm)
+    np.copyto(out_u8, norm, casting="unsafe")      # float32 -> uint8 (truncation)
+
+    return out_u8
+
+
 
 def purple_triangles(score, H):
     top_ex = int(H * EXCLUDE_TOP_FRAC)
     bot_ex = int(H * EXCLUDE_BOTTOM_FRAC)
+
     dark = (score >= RED_SCORE_THRESH).astype(np.uint8, copy=False)
     if top_ex: dark[:top_ex, :] = 0
     if bot_ex: dark[-bot_ex:, :] = 0
 
-    dark = cv2.morphologyEx(
-        dark, cv2.MORPH_OPEN,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9)), iterations=1
-    )
-    total_dark = int(dark.sum())
-    if total_dark == 0: return [], None
+    # same morphology (kernel precomputed)
+    dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, _SE_OPEN_5x9, iterations=1)
+
+    # exact replacement for int(dark.sum()) since dark is 0/1
+    total_dark = int(cv2.countNonZero(dark))
+    if total_dark == 0:
+        return [], None
 
     frac_thresh = int(np.ceil(MIN_DARK_FRACTION * total_dark))
+
     n_lbl, lbls, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
-    if n_lbl <= 1: return [], None
+    if n_lbl <= 1:
+        return [], None
 
     tris = []
     for lbl in range(1, n_lbl):
         area = stats[lbl, cv2.CC_STAT_AREA]
-        if area >= MIN_DARK_RED_AREA and area >= frac_thresh:
-            ys, xs = np.where(lbls == lbl)
-            if ys.size == 0: continue
-            y_top = ys.min()
-            x_mid = int(xs[ys == y_top].mean())
-            tris.append((x_mid, int(y_top)))
+        if area < MIN_DARK_RED_AREA or area < frac_thresh:
+            continue
 
-    if not tris: return [], None
+        xL = stats[lbl, cv2.CC_STAT_LEFT]
+        yT = stats[lbl, cv2.CC_STAT_TOP]
+        w  = stats[lbl, cv2.CC_STAT_WIDTH]
+
+        # examine only the top row inside the bbox (exact same set as xs[ys==y_top])
+        row = lbls[yT, xL:xL + w]
+        xs_rel = np.flatnonzero(row == lbl)
+        if xs_rel.size == 0:
+            continue  # should not happen; defensive
+        x_mid = int(xs_rel.mean()) + xL
+
+        tris.append((x_mid, int(yT)))
+
+    if not tris:
+        return [], None
+
     best = min(tris, key=lambda xy: xy[1])
     return tris, best
+
 
 # ===== Bearing-based Jake triangle selection =====
 def signed_degrees_from_vertical(dx, dy):
@@ -955,8 +1106,11 @@ def classify_triangles_at_sample_curved(
     tri_positions, masks_np, classes_np, H, W,
     jake_point, x_ref, best_idx, sample_px=SAMPLE_UP_PX, step_px=RAY_STEP_PX
 ):
+    __p_fn = __PROF('post.fn.classify_triangles')
     if masks_np is None or classes_np is None or len(tri_positions) == 0:
-        return [], [], [], []  # colours, rays, hit_class_ids, hit_distances_px
+        __p_fn()  # <-- call it
+        return [], [], [], []
+
 
     mh, mw = masks_np.shape[1], masks_np.shape[2]
     sx = (mw - 1) / max(1, (W - 1))
@@ -1043,6 +1197,8 @@ def classify_triangles_at_sample_curved(
         hit_class_ids.append(hit_cls)
         hit_distances_px.append(hit_dist_px)
 
+    __p_fn()
+
     return colours, rays, hit_class_ids, hit_distances_px
 
 # -----------------------------------------------------------------------
@@ -1065,11 +1221,14 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                 [], [], [], None, None, None, [], [])
 
     t0 = time.perf_counter()
+    __p_cpu = __PROF('post.to_cpu')
     masks_np = yolo_res.masks.data.detach().cpu().numpy()  # [n,h,w]
     if hasattr(yolo_res.masks, "cls") and yolo_res.masks.cls is not None:
         classes_np = yolo_res.masks.cls.detach().cpu().numpy().astype(int)
     else:
         classes_np = yolo_res.boxes.cls.detach().cpu().numpy().astype(int)
+
+    __p_cpu()
 
     to_cpu_ms = (time.perf_counter() - t0) * 1000.0
     mask_count = int(masks_np.shape[0])
@@ -1077,7 +1236,9 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
         return (None, 0, mask_count, to_cpu_ms, 0.0, masks_np, classes_np, None, None,
                 [], [], [], None, None, None, [], [])
 
+    __p_prom = __PROF('post.promote_lowbarrier')
     classes_np = promote_lowbarrier_when_wall(frame_bgr, masks_np, classes_np)
+    __p_prom()
 
     rail_sel = (classes_np == RAIL_ID)
     if not np.any(rail_sel):
@@ -1085,14 +1246,25 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                 [], [], [], None, None, None, [], [])
 
     t1 = time.perf_counter()
+    __p_rail_union = __PROF('post.rail.union+resize')
     rail_masks = masks_np[rail_sel].astype(bool, copy=False)
     union = np.any(rail_masks, axis=0).astype(np.uint8, copy=False)
     rail_mask = cv2.resize(union, (W, H), interpolation=cv2.INTER_NEAREST).astype(bool, copy=False)
+    __p_rail_union()
 
+
+    __p_highlight = __PROF('post.rails.highlight_green')
     green = highlight_rails_mask_only_fast(frame_bgr, rail_mask)
+    __p_highlight()
     red   = np.logical_and(rail_mask, np.logical_not(green))
+
+    __p_score = __PROF('post.heat.red_vs_green_score')
     score = red_vs_green_score(red, green)
+    __p_score()
+
+    __p_tris = __PROF('post.heat.purple_triangles')
     tri_positions, tri_best = purple_triangles(score, H)
+    __p_tris()
 
     # Jake triangle by bearing
     lane_name = lane_name_from_point(jake_point)
@@ -1116,7 +1288,9 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
 
     tri_positions = [p for p in tri_positions if _angle_ok(p)]
 
+    __p_pick = __PROF('post.pick_triangle_by_bearing')
     best_idx, best_deg, _ = select_triangle_by_bearing(tri_positions, xj, yj, target_deg, min_dy=6)
+    __p_pick()
 
     # x_ref for bending
     if lane_name == "mid" and (best_idx is not None) and (0 <= best_idx < len(tri_positions)):
@@ -1124,10 +1298,12 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
     else:
         x_ref = xj
 
+    __p_classify = __PROF('post.classify_triangles_curved')
     tri_colours, tri_rays, tri_hit_classes, tri_hit_dists = classify_triangles_at_sample_curved(
         tri_positions, masks_np, classes_np, H, W, jake_point, x_ref, best_idx,
         SAMPLE_UP_PX, RAY_STEP_PX
     )
+    __p_classify()
 
     if tri_positions and any(ty >= (H) for _, ty in tri_positions):
     # compute rail_grad/edge_dist and run the loop
@@ -1136,24 +1312,24 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
         EDGE_PAD_PX = 50
 
         # distance-to-rail-edge map (in pixels)
+        __p_edge = __PROF('post.edge_distance_override')
         rail_grad = cv2.morphologyEx(rail_mask.astype(np.uint8), cv2.MORPH_GRADIENT,
                                     cv2.getStructuringElement(cv2.MORPH_RECT, (3,3)))
-        # distanceTransform gives distance to the nearest 0; make edges=0, elsewhere=255
-        edge_bg = (rail_grad == 0).astype(np.uint8) * 255
+        edge_bg   = (rail_grad == 0).astype(np.uint8) * 255
         edge_dist = cv2.distanceTransform(edge_bg, cv2.DIST_L2, 5)
 
-        # mark triangles as danger if they're within EDGE_PAD_PX of an edge
-        # AND they sit in the bottom half of the screen (y >= H//2)
         for i, (tx, ty) in enumerate(tri_positions):
             if ty >= (H // 2) and edge_dist[int(ty), int(tx)] <= EDGE_PAD_PX:
-                tri_colours[i]      = COLOR_RED          # show as red in the overlay
-                tri_hit_classes[i]  = 1                  # any class in DANGER_RED; 1=GREYTRAIN works
-                tri_hit_dists[i]    = 0.0                # optional: treat as immediate
+                tri_colours[i]     = COLOR_RED
+                tri_hit_classes[i] = 1
+                tri_hit_dists[i]   = 0.0
+        __p_edge()
 
 
     post_ms = (time.perf_counter() - t1) * 1000.0
 
     # Minimal movement-friendly summary (pos, hit_class id/label, is_jake)
+    __p_summary = __PROF('post.build_tri_summary')
     tri_summary = []
     for i, (x, y) in enumerate(tri_positions):
         cid = tri_hit_classes[i] if i < len(tri_hit_classes) else None
@@ -1165,6 +1341,7 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
             "hit_dist_px": None if hdist is None else float(hdist),
             "is_jake": (i == best_idx)
         })
+    __p_summary()
 
 
     #PATHING LOGIC HERE# =================================================================================================================================================================
@@ -1175,8 +1352,9 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
         jake_hit = jake_tri["hit_class"]
 
         # For movement logging: distance to the obstacle ahead of Jake
-
+        __p_redband = __PROF('post.jake.first_red_hit_y')
         y_hit_log = first_red_hit_y(jake_tri["pos"], masks_np, classes_np, H, W, band_px=6, step_px=5)
+        __p_redband()
         obstacle_dist_px = (jy - y_hit_log) if y_hit_log is not None else None
 
         # "Yellow in Jake's lane" == Jake's own triangle has a WARN_YELLOW class.
@@ -1186,6 +1364,7 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
             theta_deg = float(tri_rays[best_idx][2]) if (best_idx is not None and 0 <= best_idx < len(tri_rays)) else 0.0
             allowed_set = JUMP_SET if int(jake_cls) in JUMP_SET else DUCK_SET
 
+            __p_starset = __PROF('post.jake.starburst_then_ray_for_set')
             dist_px, _, _ = first_mask_hit_starburst_then_ray_for_set(
                 jake_point=JAKE_POINT,
                 tri_pos=jake_tri["pos"],
@@ -1194,6 +1373,7 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                 allowed_classes=allowed_set,
                 up2_px=SAMPLE_UP_PX, step_px=2
             )
+            __p_starset()
 
             # ---- token: only lane + class ----
             new_token = (lane, int(jake_cls))
@@ -1235,9 +1415,11 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
 
         # --- 2) Lateral pathing decisions (policy: GREEN first) --------------------
         # Build reusable candidate pools (excluding Jake's current triangle)
+        __p_filter = __PROF('post.candidates.filtering')
         greens  = [t for t in tri_summary if t["hit_class"] is None]
         yellows = [t for t in tri_summary if (t["hit_class"] is not None and int(t["hit_class"]) in WARN_FOR_MOVE)]
         reds    = [t for t in tri_summary if (t["hit_class"] is not None and int(t["hit_class"]) in DANGER_RED)]
+        __p_filter()
 
         # Lane-based pruning
         greens  = _filter_by_lane(greens,  jx, lane)
@@ -1246,8 +1428,10 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
 
         # Only consider yellow if it's far enough ahead of the Jake band (e.g., 400px)
         jake_band_y   = jake_point[1]  # 1340 with your lane points
+        __p_far = __PROF('post.candidates.far_thresholds')
         yellows_far   = _filter_yellow_far(yellows, jake_band_y)  # uses MIN_YELLOW_AHEAD_PX
         greens_far  = _filter_green_far(greens, jake_band_y)
+        __p_far()
 
 
         def _nearest_x(cands):
@@ -1286,7 +1470,9 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                 else:
                     if reds:
                         # When choosing best_red:
+                        __p_redscore = __PROF('post.red_scoring')
                         best_red = max(reds, key=_red_score)
+                        __p_redscore()
                         tx = best_red["pos"][0]
                         if tx != jx:                      # avoid needless move if staying is best
                             _issue_move_towards_x(jx, tx)
@@ -1523,13 +1709,16 @@ threading.Thread(target=stream_mps_gpu_stats, daemon=True).start()
 # =======================
 
 save_frames = False
-power_metrics = True
+power_metrics = False
+active_replay = False
 times_collection = []
 
 # =======================
 
 while running:
     frame_start_time = time.perf_counter()
+    _prof_reset()
+
 
     _now = time.monotonic()
     if _now < PAUSE_UNTIL:
@@ -1546,6 +1735,33 @@ while running:
    
    # NEW (ring)
     frame_bgr, meta = get_frame_bgr_from_ring(path="/tmp/scap.ring", wait_new=True, timeout_s=0.5)  # HxWx3, uint8, contiguous
+
+    if active_replay:
+        # --- Replay dump (pre-analysis) ---
+        t0_replay = time.perf_counter()
+
+        # draw runtime (since script start) on a COPY so analysis frame stays pristine
+        frame_to_save = frame_bgr.copy()
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        time_str = f"{elapsed_ms:.3f} ms"
+
+        # bottom-right placement
+        (text_w, text_h), _ = cv2.getTextSize(time_str, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+        x_pos = frame_to_save.shape[1] - text_w - 10
+        y_pos = frame_to_save.shape[0] - 10
+
+        # outline + neon text
+        cv2.putText(frame_to_save, time_str, (x_pos, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(frame_to_save, time_str, (x_pos, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, NEON_GREEN, 2, cv2.LINE_AA)
+
+        # save; name by frame index
+        replay_path = REPLAYS_DIR / f"replay_{frame_idx:06d}.jpg"
+        cv2.imwrite(str(replay_path), frame_to_save)
+
+        replay_ms = (time.perf_counter() - t0_replay) * 1000.0
+        print(f"[REPLAY] saved {replay_path.name} in {replay_ms:.2f} ms (elapsed {elapsed_ms:.3f} ms)")
+
+
     grab_ms = (time.perf_counter() - t0_grab) * 1000.0
 
     # same style of debug print
@@ -1582,10 +1798,12 @@ while running:
 
     # --- Inference ---
     t0_inf = time.perf_counter()
+    __p_infer = __PROF('infer.model.predict')
     res_list = model.predict(
         [frame_bgr], task="segment", imgsz=IMG_SIZE, device=device,
         conf=CONF, iou=IOU, verbose=False, half=half, max_det=MAX_DET, batch=1
     )
+    __p_infer()
     infer_ms = (time.perf_counter() - t0_inf) * 1000.0
     yres = res_list[0]
 
@@ -1619,13 +1837,19 @@ while running:
         print_system_usage()
 
 
-    # --- Timing summary ---
-    print(
-        f"[TIMINGS] Grab={grab_ms:.2f} ms | PixelChk={pixel_check_ms:.2f} ms | "
-        f"LaneDet={lane_ms:.2f} ms | Inference={infer_ms:.2f} ms | "
-        f"Postproc={postproc_ms:.2f} ms | Overlay={overlay_ms:.2f} ms | "
-        f"TOTAL={total_elapsed_ms:.2f} ms"
-    )
+    if total_elapsed_ms > 60:
+        # --- Timing summary ---
+        print()
+        print(
+            f"[TIMINGS] Grab={grab_ms:.2f} ms | PixelChk={pixel_check_ms:.2f} ms | "
+            f"LaneDet={lane_ms:.2f} ms | Inference={infer_ms:.2f} ms | "
+            f"Postproc={postproc_ms:.2f} ms | Overlay={overlay_ms:.2f} ms | "
+            f"TOTAL={total_elapsed_ms:.2f} ms"
+        )
+
+        prof_summary(frame_idx)
+        print()
+
 
     times_collection.append(total_elapsed_ms)
 
