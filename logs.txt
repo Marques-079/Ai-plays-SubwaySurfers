@@ -365,4 +365,9 @@ Max speed is achieved around 2mins "allegedly"
 
 -Roll downwards on trainline ends or out of reach to give ground model best chance 
 
+Added green trianlge screenigns to prevent gravity pulls into trains due to coins
+Buffered Orange wall logic 
+
+Score: 5439 on legacy 200ms 
+
 

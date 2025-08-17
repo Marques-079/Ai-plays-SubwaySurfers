@@ -538,8 +538,8 @@ def first_mask_hit_along_segment(jake_point, tri_pos, masks_np, classes_np,
 # --- tunnel wall color gate (HSV) ---
 LOWBARRIER1_ID   = 4
 ORANGETRAIN_ID   = 6
-WALL_STRIP_PX    = 12          # vertical strip height checked just above the barrier
-WALL_MATCH_FRAC  = 0.90         # % of “wall” pixels required to relabel
+WALL_STRIP_PX    = 15          # vertical strip height checked just above the barrier
+WALL_MATCH_FRAC  = 0.05        # % of “wall” pixels required to relabel
 WALL_ORANGE_LO = np.array([5,  80,  60], dtype=np.uint8)   # H,S,V (lo)
 WALL_ORANGE_HI = np.array([35, 255, 255], dtype=np.uint8)  # H,S,V (hi)
 
@@ -587,8 +587,12 @@ def promote_lowbarrier_when_wall(frame_bgr, masks_np, classes_np,
             continue
 
         frac = float(cv2.countNonZero(strip)) / strip.size
-        if frac >= frac_thresh:
+        print(f'SCANNING FOR ORANGE WALL : % ORANGE DETECTED IS {frac}')
+        if frac <= frac_thresh:
+            print('UPGRADING CLASS TO RED')
             classes_np[i] = ORANGETRAIN_ID  # promote to a RED class
+        else:
+            print('SIGNAL NOT STRONG ENOUGH')
 
     return classes_np
 
@@ -1330,6 +1334,25 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
 
 
     post_ms = (time.perf_counter() - t1) * 1000.0
+
+    # near config with other thresholds
+    GREEN_NEAR_Y_TO_RED_PX = 615  # N pixels ahead of Jake -> force red
+    # --- GREEN->RED relabel when too close in Y (ahead of Jake) ---
+    if tri_positions:
+        xj, yj = jake_point
+        for i, (tx, ty) in enumerate(tri_positions):
+            if tri_colours[i] == COLOR_GREEN:
+                dy_ahead = yj - ty          # >0 if triangle is ahead of Jake
+                print()
+                print(f'CURRENT PERCIEVED LANE IS {lane_name.upper()}')
+                print(f'GREEN IS {dy_ahead} px ahead of Jake')
+                print()
+                if 0 < dy_ahead < GREEN_NEAR_Y_TO_RED_PX:
+                    tri_colours[i]     = COLOR_RED
+                    tri_hit_classes[i] = 1          # any class in DANGER_RED works
+                    tri_hit_dists[i]   = float(dy_ahead)  # optional annotation
+
+
 
     # Minimal movement-friendly summary (pos, hit_class id/label, is_jake)
     __p_summary = __PROF('post.build_tri_summary')
