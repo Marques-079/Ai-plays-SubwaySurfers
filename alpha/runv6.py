@@ -769,7 +769,10 @@ def _issue_move_towards_x(jx: int, tx: int):
         return
 
     now = time.perf_counter()
-    if now - last_move_ts < MOVE_COOLDOWN_S:
+    dt = now - last_move_ts
+    if dt < MOVE_COOLDOWN_S:
+        remaining = MOVE_COOLDOWN_S - dt
+        print(f"[COOLDOWN] Lane move blocked: {remaining*1000:.0f} ms remaining -> Please expect delays")
         return
 
     if tx < jx and lane > MIN_LANE:
