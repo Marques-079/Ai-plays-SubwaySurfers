@@ -32,7 +32,7 @@ PRIMARY_RAY_FOR_LANE = {0: "LEFT", 1: "MID", 2: "RIGHT"}
 HOME = os.path.expanduser("~")
 WEIGHTS = f"{HOME}/models/jakes-loped/jakes-finder-mk1/1/weights.pt"
 
-IN_DIR  = Path("frames")
+IN_DIR  = Path("frames2")
 OUT_DIR = Path("frames_plus2")
 OUT_DIR.mkdir(parents=True, exist_ok =True)
 
@@ -567,10 +567,11 @@ def main():
         print(f"[error] input folder not found: {in_dir.resolve()}")
         return
 
-    lane_2 = 2
+    lane_2 = 1
 
     for p in _iter_images(in_dir):
         save_path = out_dir / p.name
+        print(save_path)
         run_on_image(p, save_path, lane_2)
 
 if __name__ == "__main__":

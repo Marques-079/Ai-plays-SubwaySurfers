@@ -1,8 +1,6 @@
 TODO: 
 - top logic
 - improve CV
-- debug ground logic 
-- proximity curve speed callibration (time propertional to speed -> prox transformation) 
 - combo bail logic for boxed in (low priority)
 
 
@@ -372,11 +370,43 @@ Score: 5439 on legacy 200ms
 
 
 18/8/25
-We can lnow the size of the front face of trains due to the y-axis level it is on the screen
+We can lnow the size of the front face of trains due to the y-axis level it is on the screen <- irrelvsant in our logic
+
+Findings conclude mvoement time on average is:
+[
+Can we control based on set pixel detecting white or not? 
+0.332secs for side moves 
+0.919secs for all jump moves train 
+
+]
+
+19/8/25
+Dynamic adjusting proximity equation is redundant -> Maybe just use: When global time > X then adjust offset by X seconds in O(1) lookup
+
+TODO TN: 
+- Reinforce Jake lane logic for ontop of trains
+- Apply function of O(1) proximity table with respect to time in calculating impact distance
+- State for knowing if we are ontop of a train or not. 
+{
+while scanning: 
+    if standing on train mask:
+        we are on train
+    elif:
+        hit jump recently and pushing a switch then keep state
+    else:
+        ground logic
+
+}
+- Code logic for train to train movement. 1. Simple left right moves 2. Jumping straight / diagonal (2 move combo) moves. 
+- Exit logic. If no more trains and on train then +0.1 to proximity hit roll 
 
 
-
-
+Pillar regions:
+{
+    Proximity classifcation on pillars. Two options. 
+    A. Yellow until less than N pixels then pilalr turns red. Forces jake into centre then flushes out to opposite side CV reliant
+    B. Double moves only looking at rightmost or leftmost lane and double moving when either turns red. (need guard against running into a pillar nbut instant moves should negate this error)
+}
 
 
 

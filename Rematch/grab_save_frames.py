@@ -39,7 +39,7 @@ listener = keyboard.Listener(on_press=on_press)
 listener.start()
 
 # ─── Async saver ───────────────────────
-SAVE_DIR = "frames"
+SAVE_DIR = "frames4"
 os.makedirs(SAVE_DIR, exist_ok=True)
 save_q = queue.Queue()
 
@@ -99,7 +99,7 @@ while running:
     #pyautogui.press('up')
 
     #Cropped version (642,136,508,845)
-    time.sleep(0.1)
+    time.sleep(0.025)
     frame = capture_frame(snap_coords, save=frame_save)
 
     now = time.time()
