@@ -1,6 +1,7 @@
 TODO: 
 - top logic
 - improve CV
+-regular bail logic no delay
 - combo bail logic for boxed in (low priority)
 
 
@@ -411,7 +412,14 @@ Pillar regions:
 
 
 
+24/08/25
 
+Updating CV model
+Bush1 - Stabdard single Bush
+Bush2- Bush with red box in middle
+Bush3 - Bush pair 
+Bin - Rubbish Bin
+Jump - Jump onto sidealks
 
 
 
