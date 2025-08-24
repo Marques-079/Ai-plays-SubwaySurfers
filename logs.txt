@@ -2,6 +2,7 @@ TODO:
 - top logic
 - improve CV
 -regular bail logic no delay
+ -optimise out recomputes got identified a few 
 - combo bail logic for boxed in (low priority)
 
 

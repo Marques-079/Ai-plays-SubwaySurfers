@@ -5,7 +5,7 @@
 # • Arrow keys switch lane (0/1/2) -> JAKE_POINT updates per frame
 # • Full overlay rendering + per-frame save
 # • Prints compact timing per frame
-# • RETURNS per frame: tri_positions, best_idx, tri_hit_classes, tri_summary (for movement logic)
+# • RETURNS per frame: tri_positions, best_idx, tri_hit_classes, tri_summary (for movement logic) SAVE
 
 import os, time, math, subprocess
 import cv2, torch, numpy as np
@@ -19,6 +19,8 @@ from threading import Thread
 import time
 start_time = time.perf_counter()
 from ring_grab import get_frame_bgr_from_ring  # or place the helper above and import nothing
+from typing import Optional
+
 
 
 # purple triangles funciton config
@@ -159,6 +161,82 @@ REPLAYS_DIR = out_dir.parent / "replays"
 REPLAYS_DIR.mkdir(parents=True, exist_ok=True)
 NEON_GREEN = (57, 255, 20)  # BGR neon green
 
+#================================================================================================================================================================
+
+# === Saving toggles ===    
+save_top_frames = True         # NEW: TL (top-logic) analysed frames
+
+# Existing overlay dir:
+out_dir = Path(home) / "Documents" / "GitHub" / "Ai-plays-SubwaySurfers" / "out_live_overlays"
+out_dir.mkdir(parents=True, exist_ok=True)
+
+# NEW: top-logic output dir
+TOP_OUT_DIR = out_dir.parent / "out_top_logic"
+TOP_OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+
+from TL_modular import run_top_logic_on_frame
+
+# --- helper inside the main script (no extra work; passes precomputed results) ---
+def do_top_logic_from_result(
+    frame_bgr: np.ndarray,
+    yolo_result,
+    lane_2: int,
+    *,
+    save_analysed: bool = True,
+    save_path: Optional[str] = None,
+    print_prefix: str = ""
+):
+    """
+    Extracts masks/classes from an existing YOLO 'segment' result and runs the exact
+    'script2' logic in TL_modular without reloading the model or re-running predict().
+
+    Args:
+        frame_bgr: original frame (BGR).
+        yolo_result: ultralytics result for this frame (already computed).
+        lane_2: current lane state carried over from your main loop.
+        save_analysed: toggle saving the annotated frame.
+        save_path: where to save (required if save_analysed=True).
+        print_prefix: optional console print prefix.
+
+    Returns:
+        decision dict from TL_modular.run_top_logic_on_frame(...)
+    """
+    if yolo_result is None:
+        masks_np = None
+        classes_np = None
+    else:
+        if getattr(yolo_result, "masks", None) is not None and getattr(yolo_result.masks, "data", None) is not None:
+            masks_np = yolo_result.masks.data.detach().cpu().numpy()
+        else:
+            masks_np = None
+
+        if getattr(yolo_result, "boxes", None) is not None and getattr(yolo_result.boxes, "cls", None) is not None:
+            classes_np = yolo_result.boxes.cls.detach().cpu().numpy().astype(int)
+        else:
+            classes_np = None
+
+    return run_top_logic_on_frame(
+        frame_bgr,
+        masks_np,
+        classes_np,
+        lane_2,
+        save_frames=save_analysed,
+        save_path=save_path,
+        print_prefix=print_prefix
+    )
+
+def _stamp_lane_badge(img, lane_idx: int):
+    name = ("LEFT","MID","RIGHT")[lane_idx] if 0 <= lane_idx <= 2 else str(lane_idx)
+    # outline + text so it pops on any background
+    cv2.putText(img, f"LANE: {name}", (10, 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(img, f"LANE: {name}", (10, 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 1, cv2.LINE_AA)
+
+
+#======================================================================================================================================================================================
 
 # Crop + click (set by ad layout)
 advertisement = True
@@ -277,7 +355,7 @@ IMPACT_MAX_PX = 650
 # Example placeholders; REPLACE with your numbers:
 LUT_PX = np.array([100, 125, 150, 175, 200, 225, 250, 275, 300, 325, 350, 375, 400, 425, 450, 475, 500, 525, 550, 575, 600, 625, 650, 675, 700, 725, 750, 775, 800], dtype=float)
 
-SHORTEN_S = 0.35 #Shortnen by 100ms
+SHORTEN_S = 0.45 #Shortnen by 100ms #Optimal 0.35 TESTED -> 0.45 ALS OOPTIMAL
 # Safety clamps so Timer never explodes or becomes a no-op
 MIN_DELAY_S = 0.03   # 30 ms
 MAX_DELAY_S = 2.00   # 2 s
@@ -2088,9 +2166,39 @@ while running:
 
         times_collection.append(total_elapsed_ms)
     else:
-        print('Currently on top of train')
-        pyautogui.press('up')
+
+        started_1 = time.perf_counter()
+        print("we are on top of train..")
+
+        # Reuse the existing toggle you already have
+        save_analysed = save_frames
+
+        # Top-logic saving is independent of normal overlay saving
+        seq = meta.get("seq", frame_idx)
+        analysed_path = str(TOP_OUT_DIR / f"top_{int(seq):06d}_analysed.png") if save_top_frames else None
+
+        decision = do_top_logic_from_result(
+            frame_bgr=frame_bgr,
+            yolo_result=yres,
+            lane_2=lane,
+            save_analysed=False,        # don’t save inside
+            save_path=None,
+            print_prefix=f"[TOP f{frame_idx:05d}] ",
+        )
+
+        save_top_frames = True
+        if save_top_frames:
+            out = decision["out_img"].copy()
+            _stamp_lane_badge(out, lane)  # your existing helper in main
+            jpg_path = TOP_OUT_DIR / f"top_{int(seq):06d}_analysed.jpg"
+            cv2.imwrite(str(jpg_path), out, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+
+        # (optional) do something with `decision` here …
+        elapsed_TL = time.perf_counter() - started_1
+        print(f"Time taken for logic TL is {elapsed_TL * 1000:.2f} ms")
         continue
+
 
 # Cleanup
 listener.join()

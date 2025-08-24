@@ -194,7 +194,7 @@ def main():
     use_ring = (args.source == "ring")
     if use_ring:
         try:
-            from ring_grab import get_frame_bgr_from_ring
+            from ring_grab import get_frame_bgr_from_ring  # type: ignore
         except Exception as e:
             print(f"[error] Unable to import ring_grab.get_frame_bgr_from_ring: {e}")
             return
