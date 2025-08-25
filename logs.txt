@@ -1,9 +1,13 @@
 TODO: 
+- Panic state and making use of percieved 10fps reaction times, no stall on proximity
 - top logic
-- improve CV
--regular bail logic no delay
+- seperate CV for specials
+- regular bail logic no delay
  -optimise out recomputes got identified a few 
 - combo bail logic for boxed in (low priority)
+
+-anto coin logic of magent is enabled (pixel checks) coins -> green? 
+-Need guard against stinky red lamposts vprtexing
 
 
 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -14,6 +18,8 @@ runv3.py : legacy model, stable logic, mss grab
 runv4.py : compute analysis, toggle frame saves
 runv5.py : shared ring memory, slight recallibration of parameters + auto shutdown and killswitch
 runv6.py : introducing inference and postproc optimisations
+runv7.py : Ground logic improved across the board, top logic scanners instated and dynamic prox for high speeds + more
+runv8.py
 
 
 scgrab : swift compiled for shared memory ring + needs to be booted for shared memory 
