@@ -30,9 +30,9 @@ _SE_OPEN_5x9 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
 # One-pixel ON_TOP probe: screen coords relative to each lane anchor (x,y)
 # Tune dy for your layout; -360..-460 is typical for train tops.
 ONTOP_PROBE_OFFSETS = (
-    (0, -420),  # lane 0: left
-    (0, -420),  # lane 1: mid
-    (0, -420),  # lane 2: right
+    (0, 20),  # lane 0: left
+    (0, 20),  # lane 1: mid
+    (0, 20),  # lane 2: right
 )
 
 
@@ -237,6 +237,9 @@ def _stamp_lane_badge(img, lane_idx: int):
 
 
 #======================================================================================================================================================================================
+# ===== Side-ray → middle-triangle spacing threshold =====
+SIDE_MID_FLIP_DIST_PX = 25.0
+
 
 # Crop + click (set by ad layout)
 advertisement = True
@@ -355,7 +358,7 @@ IMPACT_MAX_PX = 650
 # Example placeholders; REPLACE with your numbers:
 LUT_PX = np.array([100, 125, 150, 175, 200, 225, 250, 275, 300, 325, 350, 375, 400, 425, 450, 475, 500, 525, 550, 575, 600, 625, 650, 675, 700, 725, 750, 775, 800], dtype=float)
 
-SHORTEN_S = 0.45 #Shortnen by 100ms #Optimal 0.35 TESTED -> 0.45 ALS OOPTIMAL
+SHORTEN_S = 0.4 #Shortnen by 100ms #Optimal 0.35 TESTED -> 0.45 ALS OOPTIMAL
 # Safety clamps so Timer never explodes or becomes a no-op
 MIN_DELAY_S = 0.03   # 30 ms
 MAX_DELAY_S = 2.00   # 2 s
@@ -465,6 +468,23 @@ def _impact_delay_seconds(dist_px: float) -> float:
     delay = float(np.interp(d_clamped, LUT_PX, LUT_S))
     # Final safety clamp
     return max(MIN_DELAY_S, min(delay, MAX_DELAY_S))
+
+def _dist_point_to_segment(p, a, b) -> float:
+    """Euclidean distance from point p to segment a-b (screen pixels)."""
+    px, py = float(p[0]), float(p[1])
+    ax, ay = float(a[0]), float(a[1])
+    bx, by = float(b[0]), float(b[1])
+    vx, vy = bx - ax, by - ay
+    wx, wy = px - ax, py - ay
+    seg_len2 = vx*vx + vy*vy
+    if seg_len2 <= 1e-12:
+        # a and b are the same point
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, (wx*vx + wy*vy) / seg_len2))
+    projx = ax + t * vx
+    projy = ay + t * vy
+    return math.hypot(px - projx, py - projy)
+
 
 
 def _arm_impact_timer(dist_px: float, cls_id: int):
@@ -635,7 +655,7 @@ def first_mask_hit_along_segment(jake_point, tri_pos, masks_np, classes_np,
 LOWBARRIER1_ID   = 4
 ORANGETRAIN_ID   = 6
 WALL_STRIP_PX    = 15          # vertical strip height checked just above the barrier
-WALL_MATCH_FRAC  = 0.05        # % of “wall” pixels required to relabel
+WALL_MATCH_FRAC  = 0.13        # % of “wall” pixels required to relabel
 WALL_ORANGE_LO = np.array([5,  80,  60], dtype=np.uint8)   # H,S,V (lo)
 WALL_ORANGE_HI = np.array([35, 255, 255], dtype=np.uint8)  # H,S,V (hi)
 
@@ -1599,7 +1619,52 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                     tri_hit_classes[i] = 1          # any class in DANGER_RED works
                     tri_hit_dists[i]   = float(dy_ahead)  # optional annotation
 
+    # --- SIDE-RAY → MIDDLE TRIANGLE rule (ray-tip vs ray-tip) ---
+    if lane in (0, 2) and tri_positions and tri_rays:
+        jx, jy = jake_point
 
+        # 1) "middle" = apex closest to mid-lane x
+        mid_x = LANE_MID[0]
+        mid_idx = min(range(len(tri_positions)),
+                    key=lambda i: abs(tri_positions[i][0] - mid_x))
+
+        # 2) pick the *first* triangle on the opposite side of Jake (smallest y)
+        if lane == 2:  # Jake in RIGHT lane → look LEFT of Jake
+            side_idxs = [i for i, (x, y) in enumerate(tri_positions) if x < jx]
+        else:          # lane == 0: Jake in LEFT lane → look RIGHT of Jake
+            side_idxs = [i for i, (x, y) in enumerate(tri_positions) if x > jx]
+
+        if side_idxs:
+            side_idx = min(side_idxs, key=lambda i: tri_positions[i][1])
+
+            # --- NEW: use the *ray endpoints* for both triangles of interest
+            # tri_rays[i] = (p0, p1, theta); p1 is the ray end
+            p2_mid  = tri_rays[mid_idx][1]
+            p2_side = tri_rays[side_idx][1]
+
+            dx = int(p2_side[0]) - int(p2_mid[0])
+            dy = int(p2_side[1]) - int(p2_mid[1])
+            d = math.hypot(dx, dy)
+
+            # Optional: visualize the two ray tips
+            # (uncomment if you want dots on the saved overlay image)
+            # cv2.circle(frame_bgr, (int(p2_mid[0]), int(p2_mid[1])),  5, (0, 0, 0), -1, cv2.LINE_AA)
+            # cv2.circle(frame_bgr, (int(p2_mid[0]), int(p2_mid[1])),  3, (255, 255, 255), -1, cv2.LINE_AA)
+            # cv2.circle(frame_bgr, (int(p2_side[0]), int(p2_side[1])), 5, (0, 0, 0), -1, cv2.LINE_AA)
+            # cv2.circle(frame_bgr, (int(p2_side[0]), int(p2_side[1])), 3, (255, 255, 255), -1, cv2.LINE_AA)
+
+            # If your policy is "we want them to be within 25px", keep:
+            # - GOOD when d < 25
+            # - Flip to RED when d > 25
+            if d > SIDE_MID_FLIP_DIST_PX:
+                tri_colours[mid_idx]     = COLOR_RED
+                tri_hit_classes[mid_idx] = 1  # any DANGER_RED id
+                tri_hit_dists[mid_idx]   = float(d)
+
+            print(f"[SIDE→MID] lane={lane} mid={mid_idx} side={side_idx} "
+                f"ray-tip distance d={d:.1f}px (thr={SIDE_MID_FLIP_DIST_PX})")
+
+    # ---------------------------------------------------------------------------
 
     # Minimal movement-friendly summary (pos, hit_class id/label, is_jake)
     __p_summary = __PROF('post.build_tri_summary')
@@ -1983,6 +2048,24 @@ def stream_mps_gpu_stats():
 # call once before your while-loop:
 threading.Thread(target=stream_mps_gpu_stats, daemon=True).start()
 
+def _selective_hit_from_classes(classes_np, watched: set[int]):
+    """
+    Returns (hit: bool, ids: list[int]) given a per-instance class array.
+    Use this after any class promotion step if you want that respected.
+    """
+    if classes_np is None:
+        return False, []
+    try:
+        uniq = np.unique(classes_np.astype(int))
+    except Exception:
+        uniq = [int(c) for c in classes_np]
+    hits = [int(c) for c in uniq if int(c) in watched]
+    return (len(hits) > 0), hits
+
+def _labels_for(ids):
+    """Map class IDs to human-readable labels."""
+    return [LABELS.get(int(i), str(int(i))) for i in ids]
+
 #=====================================================================================================================
 
 # =======================
@@ -1991,6 +2074,11 @@ save_frames = False
 power_metrics = False
 active_replay = False
 times_collection = []
+
+# === Selective save (save every frame when certain classes are present) ===
+SELECTIVE_SAVE_ENABLED = True
+WATCH_SAVE_CLASSES = {10, 7}  # tweak as you like
+
 
 # =======================
 
@@ -2117,6 +2205,8 @@ while running:
 
     _p_GROUND_OR_TOP()
 
+    print(f"Currently lane is {lane}")
+
 
 
     if not on_top_now:
@@ -2128,19 +2218,31 @@ while running:
         tri_hit_classes, tri_summary) = process_frame_post(frame_bgr, yres, JAKE_POINT)
         postproc_ms = (time.perf_counter() - t0_post) * 1000.0
 
+        # --- Selective save (level-triggered; save every frame while watched classes are present) ---
+        save_selective = False
+        sel_ids = []
+        if SELECTIVE_SAVE_ENABLED:
+            save_selective, sel_ids = _selective_hit_from_classes(classes_np, WATCH_SAVE_CLASSES)
+
+
         total_proc_ms = grab_ms + pixel_check_ms + lane_ms + infer_ms + postproc_ms
 
-        if save_frames:
+        # (timing print; optional — keep only if you want it)
+        if save_frames or save_selective:
             elapsed_no_post = time.perf_counter() - frame_start_time
             print(f"Frame {frame_idx} WITHOUT POSTPROC WAS: {elapsed_no_post * 1000:.2f} ms")
 
-        if save_frames:
+        # Render & write overlay
+        if save_frames or save_selective:
             t0_overlay = time.perf_counter()
             overlay = render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
                                     tri_positions, tri_colours, tri_rays, best_idx, best_deg, x_ref, JAKE_POINT)
-            out_path = out_dir / f"live_overlay_{frame_idx:05d}.jpg"
+            tag = "_sel" if save_selective else ""
+            out_path = out_dir / f"live_overlay_{frame_idx:05d}{tag}.jpg"
             cv2.imwrite(str(out_path), overlay)
             overlay_ms = (time.perf_counter() - t0_overlay) * 1000.0
+            if save_selective:
+                print(f"[SAVE] selective hit: {', '.join(_labels_for(sel_ids))} -> {out_path.name}")
         else:
             overlay_ms = 0.0
 
@@ -2186,7 +2288,7 @@ while running:
             print_prefix=f"[TOP f{frame_idx:05d}] ",
         )
 
-        save_top_frames = True
+        save_top_frames = False
         if save_top_frames:
             out = decision["out_img"].copy()
             _stamp_lane_badge(out, lane)  # your existing helper in main

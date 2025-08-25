@@ -10,7 +10,7 @@ from typing import List, Dict, Tuple, Optional
 # ===================== MASTER FEATURE GUARD =====================
 # When False: disable ALL overlays (drawing) and disk writes.
 # Computation & decisions still run identically.
-SAVES_ON = True
+SAVES_ON = False
 # ===============================================================
 
 # ===================== PROFILING SWITCHES =====================
