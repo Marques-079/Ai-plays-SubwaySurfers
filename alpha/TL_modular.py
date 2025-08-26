@@ -13,6 +13,43 @@ from typing import List, Dict, Tuple, Optional
 SAVES_ON = False
 # ===============================================================
 
+# --- movement output (pyautogui) for lateral_TL only ---
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = False
+    pyautogui.PAUSE = 0
+    _HAS_PYAUTO = True
+except Exception:
+    _HAS_PYAUTO = False
+
+# Cooldown STATE strictly for lateral_TL (left/right lane taps)
+_LTL_LAST_TAP_TS = 0.0
+_LTL_TAP_COOLDOWN_S = 0.330  # seconds
+
+def _ltl_try_tap(key: str) -> bool:
+    global _LTL_LAST_TAP_TS, _TL_STICKY_UNTIL
+    if not _HAS_PYAUTO:
+        return False
+    now = time.perf_counter()
+    if now - _LTL_LAST_TAP_TS < _LTL_TAP_COOLDOWN_S:
+        return False
+    pyautogui.press(key)
+    _LTL_LAST_TAP_TS = now
+    # start the TOP stickiness window
+    import time as _t
+    _TL_STICKY_UNTIL = _t.monotonic() + STICKY_AFTER_LATERAL_S
+    return True
+
+
+# --- Hold state while carrying out lateral movementsp ---
+_TL_STICKY_UNTIL = 0.0          # monotonic seconds
+STICKY_AFTER_LATERAL_S = 0.30    # <-- your 0.3s window
+
+def tl_sticky_until() -> float:
+    """Monotonic timestamp until which TOP should be forced after a TL lateral tap."""
+    return _TL_STICKY_UNTIL
+
+
 # ===================== PROFILING SWITCHES =====================
 PROF_VERBOSE = True          # set False to mute all profiling prints
 PROF_SLOW_MS = 10.0          # highlight steps slower than this (ms)
@@ -42,6 +79,28 @@ def _mem(prefix: str):
         print(f"{prefix}[MEM] RSS={rss_mb:.1f} MB")
 
 # ----------------- CONFIG (mirrors your script exactly) -----------------
+
+# --- suppress lateral taps while standing on a ramp ---
+SUPPRESS_LAT_ON_RAMP = True
+RAMP_CLASS_ID = 8
+
+# --- yellow-arrow → scanline decisioning (NEW) ---
+SCAN_Y             = 1450   # scan band center
+SCAN_BAND_PX       = 6      # ± vertical tolerance for y-band
+SCAN_PERSIST       = True   # once triggered, keep scanning every frame
+
+# probe thrown vertically from the yellow arrow tip (target)
+YELLOW_PROBE_LEN   = 100    # pixels upward from the tip
+YELLOW_PROBE_THICK = 2      # half-width (x) around the tip for probe hit test
+
+# sticky state (lives for this process)
+_scan_persist_active = False
+
+# Lateral move activation gate
+LAT_MOVE_Y_THRESH_PX = 400  # active when arrow length (dy) < this
+lat_move_active = False
+
+
 BRIDGE_GAP_PX = 32   # max gap to bridge (pixels along ray)
 
 # --- endpoint marker (triangles) ---
@@ -56,6 +115,24 @@ LANE_LEFT   = (300, 1340)
 LANE_MID    = (490, 1340)
 LANE_RIGHT  = (680, 1340)
 LANE_ANCHORS = {0: LANE_LEFT, 1: LANE_MID, 2: LANE_RIGHT}
+
+# ---- add up to 6 more points here (second dot per lane) ----
+EXTRA_DOTS = [
+    (300, 1300),  # LEFT 2
+    (490, 1300),  # MID 2
+    (680, 1300),  # RIGHT 2
+]
+
+# Map each lane to its two check points
+LANE_DOTS = {
+    0: [LANE_LEFT,  EXTRA_DOTS[0]],
+    1: [LANE_MID,   EXTRA_DOTS[1]],
+    2: [LANE_RIGHT, EXTRA_DOTS[2]],
+}
+
+# RGBA color gate config
+LANE_DOT_TARGET_RGBA = (252, 245, 226, 255)
+LANE_DOT_TOL_FRAC    = 0.90  # 4% per channel
 
 # Primary ray to use when selecting the triangle for a lane
 PRIMARY_RAY_FOR_LANE = {0: "LEFT", 1: "MID", 2: "RIGHT"}
@@ -99,6 +176,233 @@ LANE_RAYS = {
 }
 
 # ----------------- Helpers (identical logic) -----------------
+
+def _is_on_ramp_now(lane_idx: int,
+                    rays_for_lane: List[Dict],
+                    segments_by_ray: Dict[str, List[Tuple[float, float, int]]],
+                    scan_y: int,
+                    band_px: int) -> bool:
+    """
+    True if the lane's PRIMARY ray is a RAMP at y=scan_y (±band).
+    Uses the already-built segments_by_ray, so it's cheap.
+    """
+    pr_name = PRIMARY_RAY_FOR_LANE.get(lane_idx, "MID")
+    ray = next((r for r in rays_for_lane if r.get("name") == pr_name), None)
+    if not ray:
+        return False
+    segs = segments_by_ray.get(pr_name, [])
+    for yy in range(scan_y - band_px, scan_y + band_px + 1):
+        hit = _intersect_ray_with_y(ray["start"], float(ray["angle_deg"]), float(ray["length"]), yy)
+        if not hit:
+            continue
+        t, _ = hit
+        seg = _segment_at_t(segs, t)
+        if seg and int(seg[2]) == RAMP_CLASS_ID:
+            return True
+    return False
+
+def _build_class_mask(H: int, W: int,
+                      masks_np: Optional[np.ndarray],
+                      classes_np: Optional[np.ndarray],
+                      class_ids: set) -> np.ndarray:
+    """Boolean HxW mask for any of class_ids."""
+    m = np.zeros((H, W), dtype=bool)
+    if masks_np is None or classes_np is None or masks_np.size == 0:
+        return m
+    n = min(masks_np.shape[0], classes_np.shape[0])
+    for mk, ck in zip(masks_np[:n], classes_np[:n]):
+        if int(ck) not in class_ids:
+            continue
+        mask = _resize_mask_to_frame(mk, W, H)
+        m |= mask
+    return m
+
+
+def _intersect_ray_with_y(start_xy: Tuple[int, int],
+                          angle_deg: float,
+                          length_px: float,
+                          y_target: int) -> Optional[Tuple[float, Tuple[int, int]]]:
+    """Return (t, (x,y)) for intersection of a ray segment with horizontal line y=y_target."""
+    x0, y0 = map(int, start_xy)
+    r = math.radians(angle_deg)
+    dx, dy = math.sin(r), -math.cos(r)
+    if abs(dy) < 1e-6:
+        return None
+    t = (y_target - y0) / dy
+    if t < 0 or t > float(length_px):
+        return None
+    x = int(round(x0 + dx * t))
+    y = int(round(y0 + dy * t))
+    return float(t), (x, y)
+
+
+def _segment_at_t(segments: List[Tuple[float, float, int]], t: float
+                  ) -> Optional[Tuple[float, float, int]]:
+    """Find the (t0,t1,cls) segment that contains t, else None."""
+    for (t0, t1, c) in segments:
+        if t0 <= t <= t1:
+            return (t0, t1, int(c))
+    return None
+
+
+def _rails_hit_vertical_probe(rails_map: np.ndarray,
+                              tip_xy: Tuple[int, int],
+                              length: int,
+                              thick: int,
+                              *,
+                              draw: bool = False,
+                              out_img: Optional[np.ndarray] = None) -> bool:
+    """
+    Shoot a vertical probe from the yellow-arrow tip upward (negative y).
+    If any pixel under the probe overlaps rails_map => True.
+    thick is the +/- x half-width around the tip.
+    """
+    H, W = rails_map.shape
+    x0, y0 = int(tip_xy[0]), int(tip_xy[1])
+    y1 = max(0, y0 - int(length))
+    xL = max(0, x0 - int(thick))
+    xR = min(W - 1, x0 + int(thick))
+
+    hit = rails_map[y1:y0+1, xL:xR+1].any()
+
+    if draw and out_img is not None:
+        # draw the probe in cyan; red dot if hit, white if not
+        cv2.line(out_img, (x0, y0), (x0, y1), (255, 255, 0), 2, cv2.LINE_AA)
+        cv2.rectangle(out_img, (xL, y1), (xR, y0), (128, 128, 128), 1, cv2.LINE_AA)
+        cv2.circle(out_img, (x0, y1), 5, (0, 0, 255) if hit else (255, 255, 255), -1, cv2.LINE_AA)
+    return bool(hit)
+
+
+def _scan_and_decide_move(lane_idx: int,
+                          rays_for_lane: List[Dict],
+                          segments_by_ray: Dict[str, List[Tuple[float, float, int]]],
+                          band_px: int,
+                          *,
+                          do_overlays: bool,
+                          out_img: Optional[np.ndarray]) -> Tuple[Optional[str], Dict[str, object]]:
+    """
+    Intersect the SCAN_Y±band with the available hard-coded rays.
+    If the intersection lies on a TRAIN/RAMP segment, propose a move.
+    If both sides valid, choose the longer segment (t1-t0).
+    """
+    # which rays we can move onto from each lane
+    plan: List[Tuple[str, str]] = []
+    if lane_idx == 1:      # MID -> can go LEFT or RIGHT
+        plan = [("LEFT", "MOVE_LEFT"), ("RIGHT", "MOVE_RIGHT")]
+    elif lane_idx == 0:    # LEFT -> can only go RIGHT (onto MID ray)
+        plan = [("MID", "MOVE_RIGHT")]
+    else:                  # RIGHT -> can only go LEFT (onto MID ray)
+        plan = [("MID", "MOVE_LEFT")]
+
+    r_by_name = {r["name"]: r for r in rays_for_lane}
+    print(f"[scan] lane={lane_idx} plan={plan}")
+
+    candidates = []  # (seg_len, action, ray_name, xy, t, cls_id)
+
+    for ray_name, action in plan:
+        ray = r_by_name.get(ray_name)
+        if ray is None:
+            continue
+        segs = segments_by_ray.get(ray_name, [])
+        best_here = None
+        best_len = -1.0
+
+        for yy in range(SCAN_Y - band_px, SCAN_Y + band_px + 1):
+            hit = _intersect_ray_with_y(ray["start"], float(ray["angle_deg"]), float(ray["length"]), yy)
+            if not hit:
+                continue
+            t, (x, y) = hit
+            seg = _segment_at_t(segs, t)
+            if not seg:
+                continue
+            t0, t1, cls_id = seg
+            if int(cls_id) not in TRAIN_CLASSES:
+                continue
+            seg_len = float(t1 - t0)
+            if seg_len > best_len:
+                best_len = seg_len
+                best_here = (seg_len, action, ray_name, (int(x), int(y)), float(t), int(cls_id))
+
+        if best_here is not None:
+            print(f"[scan] candidate {ray_name}: seg_len={best_len:.1f} -> {action}")
+            candidates.append(best_here)
+
+    if not candidates:
+        print(f"[scan] no valid train/ramp at y={SCAN_Y}±{band_px}")
+        return None, {"reason": "no-train-or-ramp-on-scanline", "scan_y": SCAN_Y, "band": band_px}
+
+    candidates.sort(key=lambda k: k[0], reverse=True)
+    seg_len, action, rname, xy, tval, cid = candidates[0]
+    print(f"[scan] choose {action} on {rname} len={seg_len:.0f} class={LABELS.get(cid, cid)} @xy={xy}")
+
+
+    if do_overlays and out_img is not None:
+        # draw scan band + chosen intersection
+        y0 = SCAN_Y
+        cv2.line(out_img, (0, y0), (out_img.shape[1]-1, y0), (255, 255, 255), 1, cv2.LINE_AA)
+        if band_px > 0:
+            cv2.line(out_img, (0, y0-band_px), (out_img.shape[1]-1, y0-band_px), (128, 128, 128), 1, cv2.LINE_AA)
+            cv2.line(out_img, (0, y0+band_px), (out_img.shape[1]-1, y0+band_px), (128, 128, 128), 1, cv2.LINE_AA)
+        cv2.circle(out_img, xy, 6, (0, 0, 0), -1, cv2.LINE_AA)
+        cv2.circle(out_img, xy, 4, (0, 255, 0), -1, cv2.LINE_AA)
+        lbl = f"{rname}:{LABELS.get(cid, cid)} len={seg_len:.0f} → {action}"
+        (tw, th), _ = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        x, y = xy
+        cv2.rectangle(out_img, (x+8, y-8-th-6), (x+8+tw+6, y-8), (0,0,0), -1, cv2.LINE_AA)
+        cv2.putText(out_img, lbl, (x+12, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+
+    return action, {
+        "reason": "train-or-ramp-on-scanline",
+        "chosen_ray": rname,
+        "scan_y": SCAN_Y,
+        "band": band_px,
+        "seg_len": seg_len,
+        "t": tval,
+        "class": cid
+    }
+
+def _rgba_dot_match(img: np.ndarray, xy: Tuple[int,int],
+                    target_rgba: Tuple[int,int,int,int],
+                    tol_frac: float) -> bool:
+    """
+    True if the pixel at xy matches target RGBA within ±tol on each channel.
+    Works with BGR (3ch) or BGRA (4ch) frames. Alpha is ignored for 3ch.
+    """
+    H, W = img.shape[:2]
+    x = _clampi(int(xy[0]), 0, W-1)
+    y = _clampi(int(xy[1]), 0, H-1)
+
+    tol = int(round(255 * tol_frac))
+    # target in BGR(A) order
+    tb, tg, tr, ta = target_rgba[2], target_rgba[1], target_rgba[0], target_rgba[3]
+
+    px = img[y, x]
+    if px.ndim == 0:  # safety: unexpected shape
+        return False
+
+    if img.shape[2] == 3:  # BGR
+        b, g, r = int(px[0]), int(px[1]), int(px[2])
+        return (abs(b - tb) <= tol and abs(g - tg) <= tol and abs(r - tr) <= tol)
+    elif img.shape[2] == 4:  # BGRA
+        b, g, r, a = int(px[0]), int(px[1]), int(px[2]), int(px[3])
+        return (abs(b - tb) <= tol and abs(g - tg) <= tol and abs(r - tr) <= tol and abs(a - ta) <= tol)
+    else:
+        return False
+
+
+def _lane_dot_color_gate(img: np.ndarray, lane_idx: int,
+                         target_rgba: Tuple[int,int,int,int] = LANE_DOT_TARGET_RGBA,
+                         tol_frac: float = LANE_DOT_TOL_FRAC) -> bool:
+    """Return True iff at least one of the current lane's two dots matches the target color."""
+    pts = LANE_DOTS.get(int(lane_idx), [])
+    for p in pts:
+        if p is None:
+            continue
+        if _rgba_dot_match(img, p, target_rgba, tol_frac):
+            return True
+    return False
+
+
 def _to_gray_bgr(img_bgr: np.ndarray) -> np.ndarray:
     g = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     return cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
@@ -378,6 +682,23 @@ def run_top_logic_on_frame(
     t_total = time.perf_counter()
     H, W = frame_bgr_2.shape[:2]
 
+    lat_move_active = False 
+
+    # ---- LANE-DOT RGBA GATE (fast skip if not present) ----
+    if not _lane_dot_color_gate(frame_bgr_2, lane_2,
+                                target_rgba=LANE_DOT_TARGET_RGBA,
+                                tol_frac=LANE_DOT_TOL_FRAC):
+        _p(pfx, "[skip] lane-dot RGBA gate failed (no target-coloured dot in current lane)")
+        # instant return; no overlays or disk I/O
+        return {
+            "out_img": frame_bgr_2,   # unchanged
+            "target": None,
+            "dy": None,
+            "source_note": "skip: lane-dot rgba gate",
+            "purple_tris": [],
+            "segments_by_ray": {},
+        }
+    
     # Resolve guards
     do_overlays = bool(SAVES_ON)
     do_saves    = bool(SAVES_ON and save_frames)
@@ -425,6 +746,12 @@ def run_top_logic_on_frame(
     # [PROF] build class maps (pure compute; always)
     t0 = time.perf_counter()
     class_map, train_map = build_class_maps(H, W, masks_np[:n], classes_np[:n])
+
+    # (NEW) rails map (class 9) for yellow-probe gating
+    rails_map = _build_class_mask(H, W, masks_np[:n], classes_np[:n], class_ids={9})
+    _p(pfx, f"[maps] rails_px={int(rails_map.sum())}")
+
+
     dt = _ms(t0)
     train_px = int(train_map.sum())
     _p(pfx, f"[info] train pixels={train_px}")
@@ -581,15 +908,93 @@ def run_top_logic_on_frame(
 
     if target is not None:
         dy_val = anchor_y - target[1]
+        lat_move_active = (dy_val is not None) and (dy_val < LAT_MOVE_Y_THRESH_PX)
+        _p(pfx, f"[gate] LAT_Move={'ON' if lat_move_active else 'OFF'} (dy={dy_val}, thr={LAT_MOVE_Y_THRESH_PX})")
+
         if do_overlays:
             _draw_anchor_vector(out, anchor_xy, target, color=(0,255,255))
-            _draw_badge(out, f"Target {source_note}  Δy={dy_val:d}px", x=10, y=34)
         _p(pfx, f"[choose] target={target} dy={dy_val} note={source_note}")
     else:
         dy_val = None
-        if do_overlays:
-            _draw_badge(out, f"No purple triangle above anchor ({source_note})", x=10, y=34)
         _p(pfx, f"[choose] target=None note={source_note}")
+
+        # ----------------- (NEW) SCANLINE DECISIONING -----------------
+    scan_triggered = False
+    scan_reason = None
+    sideways_action = None
+
+    rays_for_lane = LANE_RAYS.get(lane_2, [])
+
+    # 4a) Gate: yellow-arrow vertical probe touching rails → turn on persistence
+    global _scan_persist_active
+    if target is not None:
+        probe_hit = _rails_hit_vertical_probe(
+            rails_map,
+            tip_xy=target,
+            length=YELLOW_PROBE_LEN,
+            thick=YELLOW_PROBE_THICK,
+            draw=do_overlays,
+            out_img=out if do_overlays else None
+        )
+        _p(pfx, f"[probe] tip={target} len={YELLOW_PROBE_LEN} thick={YELLOW_PROBE_THICK} rails_hit={probe_hit}")
+
+        if probe_hit:
+            _scan_persist_active = True
+            _p(pfx, "[scan] persistence ON (reason=yellow-probe-rails)")
+            scan_reason = "yellow-probe-rails"
+        elif not SCAN_PERSIST:
+            # If persistence is disabled, only scan on frames that probe hits
+            _scan_persist_active = False
+            _p(pfx, "[scan] persistence OFF (probe miss & SCAN_PERSIST=False)")
+
+
+    # 4b) If persistence active, run the scan every frame
+    if _scan_persist_active:
+        scan_triggered = True
+        if scan_reason is None:
+            scan_reason = "persisted"
+
+        sideways_action, scan_dbg = _scan_and_decide_move(
+            lane_idx=lane_2,
+            rays_for_lane=rays_for_lane,
+            segments_by_ray=segments_by_ray,
+            band_px=SCAN_BAND_PX,
+            do_overlays=do_overlays,
+            out_img=out if do_overlays else None
+        )
+        _p(pfx, f"[scan] y={SCAN_Y} band=±{SCAN_BAND_PX} reason={scan_reason} -> action={sideways_action} dbg={scan_dbg}")
+
+        # --- EXECUTE MOVEMENT KEYS: lateral_TL only (namespaced cooldown) ---
+        if scan_triggered and sideways_action in ("MOVE_LEFT", "MOVE_RIGHT"):
+            on_ramp_now = SUPPRESS_LAT_ON_RAMP and _is_on_ramp_now(
+                lane_idx=lane_2,
+                rays_for_lane=rays_for_lane,
+                segments_by_ray=segments_by_ray,
+                scan_y=SCAN_Y,
+                band_px=SCAN_BAND_PX
+            )
+
+            if on_ramp_now:
+                _p(pfx, "[INPUT/lateral_TL] suppressed: ON RAMP at scanline")
+            elif lat_move_active:
+                key = "left" if sideways_action == "MOVE_LEFT" else "right"
+                if _ltl_try_tap(key):
+                    _p(pfx, f"[INPUT/lateral_TL] tapped {key}")
+            else:
+                _p(pfx, f"[INPUT/lateral_TL] suppressed: LAT_Move OFF (dy={dy_val}, thr={LAT_MOVE_Y_THRESH_PX})")
+
+
+
+    else:
+        _p(pfx, "[scan] not triggered")
+
+    # (optional) augment the badge
+    if do_overlays:
+        badge = f"Target {source_note}  Δy={dy_val:d}px" if target is not None \
+                else f"No purple triangle above anchor ({source_note})"
+        if sideways_action:
+            badge += f" | SCAN→{sideways_action}"
+        _draw_badge(out, badge, x=10, y=34)
 
     if do_saves and save_path:
         t0 = time.perf_counter()
@@ -607,4 +1012,11 @@ def run_top_logic_on_frame(
         "source_note": source_note,
         "purple_tris": purple_tris,
         "segments_by_ray": segments_by_ray,
+        # NEW:
+        "scan_triggered": scan_triggered,
+        "sideways_action": sideways_action,
+        "scan_y": SCAN_Y,
+        "scan_band_px": SCAN_BAND_PX,
+        "lat_move_active": lat_move_active,
     }
+

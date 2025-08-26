@@ -1,10 +1,14 @@
 TODO: 
+-URGENT: Pillar movement not processing pyautogui
+-resolve ihibitinga switchback to GL after airtime jumps
+
 - Panic state and making use of percieved 10fps reaction times, no stall on proximity
 - top logic
 - seperate CV for specials
 - regular bail logic no delay
  -optimise out recomputes got identified a few 
 - combo bail logic for boxed in (low priority)
+- I suspect rebounds, we need stricter protocl on cooldowns after moves for GL
 
 -anto coin logic of magent is enabled (pixel checks) coins -> green? 
 -Need guard against stinky red lamposts vprtexing
@@ -417,8 +421,6 @@ Pillar regions:
 }
 
 
-
-
 24/08/25
 
 Updating CV model
@@ -428,9 +430,24 @@ Bush3 - Bush pair
 Bin - Rubbish Bin
 Jump - Jump onto sidealks
 
+25/08 
+
+HIGH_SCORE : 7251
+
+26/08
+Refocus8 + runv8 
+Improved ground logic 
+
+Top of train laneswap logic should be, 
+When can see ground masks after tip of yellow arrow - valid to arm timer set to jump and lock (1). 
+While timer is active and still scanning reviews a band 1100 - 1300ish for any train marked lines, picks largest one and moves into that if Foundation
+If nothing when timer triggers then scan for valid jump + move sequences (1) if none then roll down off train enter GL 
 
 
+Pillar logic fires correctly but doesnt execute? 
+Lane muddling on sidewalk regions
 
+Solved Vortes, Sidewalks + pillar logic resolve?
 
 
 
@@ -494,6 +511,3 @@ SCStream running: ROI 640x480 → out 1280x960 @60 (scale 2.0x)
 ^C
 (.venv) marcus@Marcuss-MacBook-Pro Ai-plays-SubwaySurfers % ./scgrab --x 644 --y 77 --w 505 --h 906 --fps 60 --out /tmp/scap.ring --slots 3 --scale 2 
 
-25/08 
-
-HIGH_SCORE : 7251

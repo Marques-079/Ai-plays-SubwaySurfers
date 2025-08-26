@@ -1,11 +1,66 @@
-#!/usr/bin/env python3
-# Live overlays + lane-aware curved sampling (optimized postproc)
-# • Parsec focus + auto click
-# • mss live capture of a crop region
-# • Arrow keys switch lane (0/1/2) -> JAKE_POINT updates per frame
-# • Full overlay rendering + per-frame save
-# • Prints compact timing per frame
-# • RETURNS per frame: tri_positions, best_idx, tri_hit_classes, tri_summary (for movement logic) SAVE
+# ======= DROP-IN GLOBAL MUTE (put this at the VERY TOP) ======================
+import os, sys, argparse, builtins, warnings
+
+# Parse just our flags first; leave everything else for your main argparse later
+_mute_parser = argparse.ArgumentParser(add_help=False)
+_mute_parser.add_argument("--quiet",  action="store_true",
+                          help="Mute stdout/stderr (no terminal I/O).")
+_mute_parser.add_argument("--silent", action="store_true",
+                          help="Stronger mute: also replace print() with no-op.")
+_mute_args, _ = _mute_parser.parse_known_args()
+
+SILENT_MODE = bool(_mute_args.silent)
+QUIET_MODE  = bool(_mute_args.quiet or _mute_args.silent)
+
+def _redirect_to_devnull():
+    # Python-level redirection
+    sys.stdout = open(os.devnull, "w")
+    sys.stderr = open(os.devnull, "w")
+    # OS-level redirection (catches C/C++ prints)
+    try:
+        dn_fd = os.open(os.devnull, os.O_WRONLY)
+        for fd in (1, 2):  # stdout, stderr
+            try:
+                os.dup2(dn_fd, fd)
+            except OSError:
+                pass
+        os.close(dn_fd)
+    except Exception:
+        pass
+
+# Global muting for libraries / warnings / logging
+if QUIET_MODE:
+    _redirect_to_devnull()
+    warnings.filterwarnings("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+    try:
+        import logging
+        logging.disable(100)  # beyond CRITICAL
+        root = logging.getLogger()
+        root.handlers[:] = []
+        root.setLevel(100)
+    except Exception:
+        pass
+
+# Replace print itself (prevents function call overhead, but note: f-strings are
+# still evaluated at the call site — use dprint(lambda: ...) to avoid that).
+if SILENT_MODE:
+    builtins.print = lambda *a, **k: None
+
+# Lazy, zero-compute debug printer for hotspots:
+def dprint(msg=None, *a, **k):
+    """
+    Use as: dprint(lambda: f'heavy {expensive()} string')
+    Nothing is computed when --quiet/--silent are active.
+    """
+    if not QUIET_MODE:
+        if callable(msg):
+            msg = msg()
+        return builtins.__dict__.get("print", lambda *aa, **kk: None)(msg, *a, **k)
+# ============================================================================
+
+# (Your regular imports and full argparse come after this block)
+
 
 import os, time, math, subprocess
 import cv2, torch, numpy as np
@@ -22,6 +77,46 @@ from ring_grab import get_frame_bgr_from_ring  # or place the helper above and i
 from typing import Optional
 
 
+# ===== Boot-time save toggle =====
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument("--save", action="store_true", help="Force saving overlays/top-logic")
+args, _ = parser.parse_known_args()
+
+save_frames = False
+
+# macOS Quartz (works if available)
+try:
+    from Quartz import CGEventSourceKeyState, kCGEventSourceStateHIDSystemState
+    _is_g_held_at_boot = lambda: bool(CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, 5))  # 5 = 'G' on US layout
+except Exception:
+    _is_g_held_at_boot = lambda: False
+
+# quick cross-platform fallback: brief listener window at startup
+def _enable_save_if_g_within_window(win_s=0.8):
+    from pynput import keyboard
+    hit = {"g": False}
+    def on_press(k):
+        try:
+            if getattr(k, "char", "").lower() == "g":
+                hit["g"] = True
+                return False
+        except Exception:
+            pass
+    L = keyboard.Listener(on_press=on_press)
+    L.start()
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < win_s and L.running:
+        time.sleep(0.02)
+    try: L.stop()
+    except: pass
+    return hit["g"]
+
+if args.save or _is_g_held_at_boot() or _enable_save_if_g_within_window():
+    save_frames = True
+    print("[BOOT] Saving enabled (arg/Quartz/boot-window)")
+
+
 
 # purple triangles funciton config
 _SE_OPEN_5x9 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
@@ -30,9 +125,9 @@ _SE_OPEN_5x9 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
 # One-pixel ON_TOP probe: screen coords relative to each lane anchor (x,y)
 # Tune dy for your layout; -360..-460 is typical for train tops.
 ONTOP_PROBE_OFFSETS = (
-    (0, 20),  # lane 0: left
-    (0, 20),  # lane 1: mid
-    (0, 20),  # lane 2: right
+    (0, 0),  # lane 0: left
+    (0, 0),  # lane 1: mid
+    (0, 0),  # lane 2: right
 )
 
 
@@ -164,7 +259,7 @@ NEON_GREEN = (57, 255, 20)  # BGR neon green
 #================================================================================================================================================================
 
 # === Saving toggles ===    
-save_top_frames = True         # NEW: TL (top-logic) analysed frames
+#save_top_frames = True         # NEW: TL (top-logic) analysed frames -> OVERWRRITEN BY G PRESS LOGIC
 
 # Existing overlay dir:
 out_dir = Path(home) / "Documents" / "GitHub" / "Ai-plays-SubwaySurfers" / "out_live_overlays"
@@ -176,7 +271,7 @@ TOP_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 
-from TL_modular import run_top_logic_on_frame
+from TL_modular import run_top_logic_on_frame, tl_sticky_until
 
 # --- helper inside the main script (no extra work; passes precomputed results) ---
 def do_top_logic_from_result(
@@ -257,6 +352,15 @@ def _only_trains_rails_pillars_present(classes_np: np.ndarray) -> bool:
     uniq = np.unique(classes_np.astype(int, copy=False))
     return (ID_PILLAR in uniq) and np.all(np.isin(uniq, tuple(PILLAR_ALLOWED)))
 
+def unit_from_theta(theta_deg: float):
+    """Return a unit (dx,dy) pointing 'theta_deg' from vertical, up = -y."""
+    t = float(theta_deg)
+    v = TRIG_TABLE.get(t)
+    if v is not None:
+        return v
+    r = math.radians(t)
+    return (math.sin(r), -math.cos(r))
+
 
 def _lane_red_straight_ahead(JAKE_POINT, masks_np, classes_np, H, W) -> bool:
     """
@@ -313,16 +417,20 @@ def pillar_evasion_check_and_act(H: int, W: int,
     if not red_ahead:                                return False
     if not move_ok:                                  return False
 
+
+    #NEED TO FIX LOGIC
     print("[PILLAR EVADE] only-allowed+pillar & RED ahead → hard sidestep")
     _synth_block_until = time.monotonic() + SYNTHETIC_SUPPRESS_S
     now = time.perf_counter()
 
     if lane == 2:
-        pyautogui.press('left'); pyautogui.press('left')
+        print(f"[DEBUG] MOVEMENT_ENABLED={MOVEMENT_ENABLED}")
+        pyautogui.press('up')
         lane = 0
         print("[PILLAR EVADE] pressed LEFT, LEFT → lane=0")
     else:
-        pyautogui.press('right'); pyautogui.press('right')
+        print(f"[DEBUG] MOVEMENT_ENABLED={MOVEMENT_ENABLED}")
+        pyautogui.press('up')
         lane = 2
         print("[PILLAR EVADE] pressed RIGHT, RIGHT → lane=2")
 
@@ -333,12 +441,125 @@ def pillar_evasion_check_and_act(H: int, W: int,
 
 #======================================================================================================================================================================================
 
+# =======================
+# Lane/keyboard state
+# =======================
+lane = 1
+MIN_LANE = 0
+MAX_LANE = 2
+running = True
+# --- Lane re-entry hysteresis (avoid bouncing back after RED) ---
+REENTRY_NEED = 2  # require N consecutive "enter" intents before re-entering banned lane
+if "REENTRY_BAN" not in globals():
+    REENTRY_BAN = {"lane": None, "counter": 0, "last_intent_dir": None, "needed": REENTRY_NEED}
+
+
+REENTRY_BAN_FRAMES = 2                 # ban only lasts this many frames after creation
+
+if "REENTRY_BAN" not in globals():
+    REENTRY_BAN = {
+        "lane": None,
+        "counter": 0,
+        "last_intent_dir": None,
+        "last_intent_frame": None,     # NEW: to enforce adjacency (sequential frames)
+        "needed": REENTRY_NEED,
+        "expiry_frame": None,          # NEW: auto-expire window
+        "created_at_frame": None,      # optional: for logging
+    }
+
+
+def _register_red_evasion_ban(prev_lane: int):
+    global REENTRY_BAN  # keep
+    # NOTE: we read the global frame_idx (no assignment -> no 'global' needed)
+    REENTRY_BAN["lane"] = int(prev_lane)
+    REENTRY_BAN["counter"] = 0
+    REENTRY_BAN["last_intent_dir"] = None
+    REENTRY_BAN["last_intent_frame"] = None
+    REENTRY_BAN["needed"] = int(REENTRY_NEED)
+    REENTRY_BAN["created_at_frame"] = int(frame_idx)
+    REENTRY_BAN["expiry_frame"] = int(frame_idx) + int(REENTRY_BAN_FRAMES)
+    print(f"[REENTRY] ban set: lane {REENTRY_BAN['lane']} "
+          f"(need {REENTRY_BAN['needed']} consecutive frames, "
+          f"expires after frame {REENTRY_BAN['expiry_frame']})")
+    
+def _reentry_gate_allow(jx: int, tx: int) -> bool:
+    global REENTRY_BAN, lane
+
+    banned = REENTRY_BAN.get("lane")
+    if banned is None:
+        return True
+
+    # --- auto-expire after the window of N frames ---
+    exp = REENTRY_BAN.get("expiry_frame")
+    if (exp is None) or (frame_idx > int(exp)):  # strictly after expiry
+        # clear the ban
+        REENTRY_BAN["lane"] = None
+        REENTRY_BAN["counter"] = 0
+        REENTRY_BAN["last_intent_dir"] = None
+        REENTRY_BAN["last_intent_frame"] = None
+        return True
+
+    # If triangle aligned with Jake (no lateral intent), clear streak and allow
+    if tx == jx:
+        REENTRY_BAN["counter"] = 0
+        REENTRY_BAN["last_intent_dir"] = None
+        REENTRY_BAN["last_intent_frame"] = None
+        return True
+
+    # Determine intent direction (+1 right, -1 left)
+    intent_dir = 1 if tx > jx else -1
+
+    # Are we trying to move back *towards* the banned lane?
+    towards_banned = (intent_dir > 0 and banned > lane) or (intent_dir < 0 and banned < lane)
+    if not towards_banned:
+        # Moving away or sideways -> allow and reset streak
+        REENTRY_BAN["counter"] = 0
+        REENTRY_BAN["last_intent_dir"] = None
+        REENTRY_BAN["last_intent_frame"] = None
+        return True
+
+    # --- within the ban window AND towards banned lane:
+    # Require *sequential frames* for the counter
+    last_dir   = REENTRY_BAN.get("last_intent_dir")
+    last_frame = REENTRY_BAN.get("last_intent_frame")
+
+    if last_dir == intent_dir and last_frame is not None and frame_idx == (int(last_frame) + 1):
+        # Adjacent frame, same direction -> increment
+        REENTRY_BAN["counter"] += 1
+    else:
+        # Not adjacent or changed direction -> start new streak
+        REENTRY_BAN["counter"] = 1
+        REENTRY_BAN["last_intent_dir"] = intent_dir
+
+    REENTRY_BAN["last_intent_frame"] = int(frame_idx)
+
+    need = int(REENTRY_BAN.get("needed", REENTRY_NEED))
+    have = int(REENTRY_BAN["counter"])
+
+    if have < need:
+        print(f"[REENTRY] veto {have}/{need} (within window till f{REENTRY_BAN['expiry_frame']})")
+        return False  # veto this move
+
+    # Achieved required consecutive intents within window -> clear ban & allow
+    print(f"[REENTRY] allowed after {need} consecutive frames → clearing ban")
+    REENTRY_BAN["lane"] = None
+    REENTRY_BAN["counter"] = 0
+    REENTRY_BAN["last_intent_dir"] = None
+    REENTRY_BAN["last_intent_frame"] = None
+    return True
+
+
+# --- Left probe offset (toggle) --- Skew our left probe off 
+LEFT_PROBE_OFFSET_ENABLED = False      # set False to disable at runtime if you like
+LEFT_PROBE_OFFSET_DEG     = 0.0      # anticlockwise = toward the left (negative in this codebase)
+
+
 SIDEWALK_ID = 10
 SIDEWALK_JUMP_THEN_DUCK_DELAY_S = 0.40  # down after jump whiel sideqlks prsetn
 
 
 # ===== Side-ray → middle-triangle spacing threshold =====
-SIDE_MID_FLIP_DIST_PX = 15.0
+SIDE_MID_FLIP_DIST_PX = 1500.0 #EXPLODE NUMBER orig 15 so that we dont convert off falsely
 
 
 # Crop + click (set by ad layout)
@@ -388,6 +609,11 @@ COLOR_RED    = (0, 0, 255)
 COLOR_WHITE  = (255, 255, 255)
 COLOR_CYAN   = (255, 255, 0)
 COLOR_BLACK  = (0, 0, 0)
+
+
+# ===== Hypergreen: treat these like "better than green" for lane picking =====
+HYPERGREEN_CLASSES = {3, 8}       # 3:JUMP, 5:LOWBARRIER2 (jump). Add 10 if you want Sidewalk too.
+MIN_HYPERGREEN_AHEAD_PX = 0     # like MIN_YELLOW_AHEAD_PX but a bit looser; tune 250–400
 
 
 if "_ONTOP_CACHE" not in globals():
@@ -465,7 +691,7 @@ LUT_BASE_S = np.array(
      0.4185, 0.4885, 0.5701, 0.6654, 0.7765, 0.9063, 1.0578, 1.2345, 1.4408,
      1.6815, 1.9625], dtype=float)
 
-SHORTEN_S = 0.42
+SHORTEN_S = 0.46
 MIN_DELAY_S = 0.03
 MAX_DELAY_S = 2.00
 
@@ -520,7 +746,7 @@ def first_mask_hit_starburst_then_ray_for_set(
             dist = math.hypot(xs - x0, ys - y0)
             return (float(dist), (int(xs), int(ys)), int(cls_hit))
 
-    dxr, dyr = TRIG_TABLE.get(theta_deg, (0.0, -1.0))
+    dxr, dyr = unit_from_theta(theta_deg)
     n2 = max(1, int(up2_px // max(1, step_px)))
     for k in range(1, n2 + 1):
         t = k * step_px
@@ -692,7 +918,7 @@ def first_mask_hit_starburst_then_ray(
             return (float(dist), (int(xs), int(ys)), int(cls_hit))
 
     # ---- segment 2: continue from triangle along angled probe (same as classify rays)
-    dxr, dyr = TRIG_TABLE.get(theta_deg, (0.0, -1.0))  # default straight up
+    dxr, dyr = unit_from_theta(theta_deg)
     n2 = max(1, int(up2_px // max(1, step_px)))
     for k in range(1, n2 + 1):
         t = k * step_px
@@ -795,7 +1021,7 @@ def percent_of_color_rgba(img, rgba=(210, 36, 35, 255), tol_frac=0.05):
 LOWBARRIER1_ID   = 4
 ORANGETRAIN_ID   = 6
 WALL_STRIP_PX    = 14          # vertical strip height checked just above the barrier
-WALL_MATCH_FRAC  = 0.13        # % of “wall” pixels required to relabel
+WALL_MATCH_FRAC  = 0.12       # % of “wall” pixels required to relabel
 WALL_ORANGE_LO = np.array([5,  80,  60], dtype=np.uint8)   # H,S,V (lo)
 WALL_ORANGE_HI = np.array([35, 255, 255], dtype=np.uint8)  # H,S,V (hi)
 
@@ -1024,7 +1250,6 @@ def _pick_best_safe_triangle(cands, jx: int):
     return min(pool, key=lambda c: abs(c["pos"][0] - jx))
 
 def _issue_move_towards_x(jx: int, tx: int, *, sidewalk_present: bool = False):
-    """Move one lane toward tx. If SIDEWALK is on screen, jump first and duck shortly after."""
     global lane, last_move_ts, _synth_block_until
     if not MOVEMENT_ENABLED:
         return
@@ -1036,6 +1261,9 @@ def _issue_move_towards_x(jx: int, tx: int, *, sidewalk_present: bool = False):
         print(f"[COOLDOWN] Lane move blocked: {remaining*1000:.0f} ms remaining -> Please expect delays")
         return
 
+    # Re-entry hysteresis gate — block until we’ve seen N consecutive intents
+    if not _reentry_gate_allow(jx, tx):
+        return
     def _jump_then_duck_if_sidewalk():
         if sidewalk_present:
             print("[SIDEWALK] jump → lane-change → duck (0.2s)")
@@ -1072,17 +1300,13 @@ def _issue_move_towards_x(jx: int, tx: int, *, sidewalk_present: bool = False):
 # =======================
 # Lane/keyboard state
 # =======================
-lane = 1
-MIN_LANE = 0
-MAX_LANE = 2
-running = True
 
 # ===== Debounce / cooldown =====
 COOLDOWN_MS = 20
 _last_press_ts = 0.0  # monotonic seconds
 
 def on_press(key):
-    global lane, running, _last_press_ts, _synth_block_until
+    global lane, running, _last_press_ts, _synth_block_until, save_frames
     now = time.monotonic()
 
     # swallow AI-generated lane key events during the suppression window
@@ -1103,11 +1327,18 @@ def on_press(key):
             _last_press_ts = now
             print(f"Moved Right into → Lane {lane}")
 
+        # NEW: press 'g' at any time to toggle saving
+        elif getattr(key, "char", "").lower() == "g":
+            save_frames = not save_frames
+            state = "ENABLED" if save_frames else "DISABLED"
+            print(f"[G] Saving {state}")
+
         elif key == keyboard.Key.esc:
             running = False
             return False
     except Exception as e:
         print(f"Error: {e}")
+
 
 
 # =======================
@@ -1549,30 +1780,18 @@ def classify_triangles_at_sample_curved(
     colours, rays, hit_class_ids, hit_distances_px = [], [], [], []
     max_k = max(1, sample_px // max(1, step_px))
 
-    for idx, (x0, y0) in enumerate(tri_positions):
-        theta = pick_bend_angle(jake_point, x0, x_ref, idx, best_idx)
+    jx, jy = map(int, jake_point)
 
-        # --- NEW: for Jake's triangle only, if we're in LEFT or RIGHT lane,
-        # make the probe an extension of JAKE_POINT -> triangle apex.
-        if idx == best_idx and (jake_point == LANE_LEFT or jake_point == LANE_RIGHT):
-            jx, jy = jake_point
-            dxv = x0 - jx
-            dyv = y0 - jy
-            L = math.hypot(dxv, dyv)
-            if L > 1e-6:
-                # normalize the true Jake->tri direction
-                dx1 = dxv / L
-                dy1 = dyv / L
-                # keep a theta value for overlays/first-hit; store the exact vector under that key
-                theta = round(signed_degrees_from_vertical(dxv, dyv), 3)
-                TRIG_TABLE[theta] = (dx1, dy1)
-            else:
-                # degenerate: fall back to straight up
-                theta = 0.0
-                dx1, dy1 = TRIG_TABLE[theta]
+    for idx, (x0, y0) in enumerate(tri_positions):
+        # Always force collinearity for Jake's triangle: extend Jake→triangle as a straight line
+        if idx == best_idx:
+            theta = signed_degrees_from_vertical(x0 - jx, y0 - jy)  # (was using xt by mistake)
+            r = math.radians(theta)
+            dx1, dy1 = math.sin(r), -math.cos(r)
         else:
-            # all other triangles keep the old bending behavior
+            theta = pick_bend_angle(jake_point, x0, x_ref, idx, best_idx)
             dx1, dy1 = TRIG_TABLE[theta]
+
 
 
         hit_colour = COLOR_GREEN
@@ -1628,6 +1847,49 @@ def classify_triangles_at_sample_curved(
     return colours, rays, hit_class_ids, hit_distances_px
 
 # -----------------------------------------------------------------------
+
+def _ahead_px_of_tri(t, jake_band_y: int) -> float:
+    # positive if triangle apex is ahead (smaller y than Jake)
+    return jake_band_y - int(t["pos"][1])
+
+def _nearest_ramp_by_y(cands, jake_band_y: int):
+    """Among hypergreen ramps (class 8), pick the one closest ahead in Y."""
+    ramps = [c for c in cands
+             if (c.get("hit_class") is not None and int(c["hit_class"]) == ID_RAMP)]
+    if not ramps:
+        return None
+    # All your *_far filters already ensure "ahead >= threshold"; still safe to sort by ahead distance
+    return min(ramps, key=lambda c: _ahead_px_of_tri(c, jake_band_y))
+
+
+def _prearm_jump_for_triangle(tri, idx, jake_point, tri_rays,
+                              masks_np, classes_np, H, W):
+    """
+    Pre-arm the standard jump timer for a triangle if it's class 3 (JUMP).
+    Uses the same starburst->ray distance the Jake-lane timer uses.
+    """
+    if tri is None:
+        return
+    cls_id = tri.get("hit_class")
+    if cls_id is None or int(cls_id) != 3:
+        return  # only class 3 (JUMP)
+
+    # Angle used for this triangle’s sampling ray
+    theta_deg = float(tri_rays[idx][2]) if (idx is not None and 0 <= idx < len(tri_rays)) else 0.0
+
+    # Distance along Jake→tri, then along that ray, but only through jump-allowed classes
+    dist_px, _, _ = first_mask_hit_starburst_then_ray_for_set(
+        jake_point=jake_point,
+        tri_pos=tri["pos"],
+        theta_deg=theta_deg,
+        masks_np=masks_np, classes_np=classes_np, H=H, W=W,
+        allowed_classes=JUMP_SET,  # {3,5,10} in your code; class 3 is the one we arm
+        up2_px=SAMPLE_UP_PX, step_px=2
+    )
+
+    if (dist_px is not None) and (IMPACT_MIN_PX < dist_px < IMPACT_MAX_PX):
+        _arm_impact_timer(float(dist_px), 3)  # uses the same Timer/token path
+
 
 # =======================
 # Frame post-processing
@@ -1756,7 +2018,7 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
     post_ms = (time.perf_counter() - t1) * 1000.0
 
     # near config with other thresholds
-    GREEN_NEAR_Y_TO_RED_PX = 615  # N pixels ahead of Jake -> force red
+    GREEN_NEAR_Y_TO_RED_PX = 615  # N pixels ahead of Jake -> force red -> With CONSEC logic can we forgo the < 615 requirment for greens
     # --- GREEN->RED relabel when too close in Y (ahead of Jake) ---
     if tri_positions:
         xj, yj = jake_point
@@ -1826,12 +2088,14 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
         cid = tri_hit_classes[i] if i < len(tri_hit_classes) else None
         hdist = tri_hit_dists[i] if i < len(tri_hit_dists) else None
         tri_summary.append({
+            "idx": i,  # <— NEW
             "pos": (int(x), int(y)),
             "hit_class": None if cid is None else int(cid),
             "hit_label": None if cid is None else LABELS.get(int(cid), f"C{int(cid)}"),
             "hit_dist_px": None if hdist is None else float(hdist),
             "is_jake": (i == best_idx)
         })
+
     __p_summary()
 
     sidewalk_present = (
@@ -1903,10 +2167,13 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                     else:
                         IMPACT_TOKEN = None  # no valid new timer yet
         else:
-            # Jake’s triangle not yellow/impact anymore → cancel & unlock
+            # Jake’s triangle not yellow/impact anymore → usually cancel,
+            # but keep a pre-armed hypergreen jump (class 3) alive.
             if IMPACT_TOKEN is not None:
-                _cancel_impact_timer("no longer impact in Jake lane")
-                IMPACT_TOKEN = None
+                _, tok_cls = IMPACT_TOKEN
+                if int(tok_cls) != 3:
+                    _cancel_impact_timer("no longer impact in Jake lane")
+                    IMPACT_TOKEN = None
 
 
         # --- 2) Lateral pathing decisions (policy: GREEN first) --------------------
@@ -1915,18 +2182,22 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
         greens  = [t for t in tri_summary if t["hit_class"] is None]
         yellows = [t for t in tri_summary if (t["hit_class"] is not None and int(t["hit_class"]) in WARN_FOR_MOVE)]
         reds    = [t for t in tri_summary if (t["hit_class"] is not None and int(t["hit_class"]) in DANGER_RED)]
+        hypergreens = [t for t in tri_summary if (t["hit_class"] is not None and int(t["hit_class"]) in HYPERGREEN_CLASSES)]
+
         __p_filter()
 
         # Lane-based pruning
         greens  = _filter_by_lane(greens,  jx, lane)
         yellows = _filter_by_lane(yellows, jx, lane)
         reds    = _filter_by_lane(reds,    jx, lane)
+        hypergreens = _filter_by_lane(hypergreens, jx, lane)
 
         # Only consider yellow if it's far enough ahead of the Jake band (e.g., 400px)
         jake_band_y   = jake_point[1]  # 1340 with your lane points
         __p_far = __PROF('post.candidates.far_thresholds')
         yellows_far   = _filter_yellow_far(yellows, jake_band_y)  # uses MIN_YELLOW_AHEAD_PX
         greens_far  = _filter_green_far(greens, jake_band_y)
+        hypergreens_far = _filter_yellow_far(hypergreens, jake_band_y, min_ahead_px=MIN_HYPERGREEN_AHEAD_PX) 
         __p_far()
 
 
@@ -1951,42 +2222,78 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
 
         # RED ahead: GREEN -> (far) YELLOW -> least-bad RED (all-red fallback)
         elif _is_danger(jake_hit):
-            tgt = _nearest_x(greens)
+            # 1) HYPERGREEN first (jump lanes)
+            tgt = _nearest_ramp_by_y(hypergreens_far, jake_band_y) or _nearest_x(hypergreens_far)
             if tgt is not None:
+                # NEW: pre-arm a jump if this hypergreen is actually class 3
+                _prearm_jump_for_triangle(tgt, tgt["idx"], jake_point, tri_rays,
+                                        masks_np, classes_np, H, W)
+
                 if MOVEMENT_ENABLED:
-                    print(f"[MOVE] RED ahead → GREEN: obstacle={LABELS.get(int(jake_hit), str(jake_hit))}, dist={_fmt_px(obstacle_dist_px)}; target_x={tgt['pos'][0]}")
+                    print(f"[MOVE] RED ahead → HYPERGREEN (jump): obstacle={LABELS.get(int(jake_hit), str(jake_hit))}, "
+                        f"dist={_fmt_px(obstacle_dist_px)}; target_x={tgt['pos'][0]}")
+                prev_lane = lane
                 _issue_move_towards_x(jx, tgt["pos"][0], sidewalk_present=sidewalk_present)
+                if lane != prev_lane:
+                    _register_red_evasion_ban(prev_lane)
+
 
             else:
-                tgt = _nearest_x(yellows_far)   # only yellows ≥ threshold above the band
+                # 2) Plain GREEN
+                tgt = _nearest_x(greens)
                 if tgt is not None:
                     if MOVEMENT_ENABLED:
-                        ahead_px = jake_band_y - tgt["pos"][1]
-                        print(f"[MOVE] RED ahead → YELLOW (far): obstacle={LABELS.get(int(jake_hit), str(jake_hit))}, dist={_fmt_px(obstacle_dist_px)}; yellow_ahead={int(ahead_px)}px (≥{MIN_YELLOW_AHEAD_PX})")
+                        print(f"[MOVE] RED ahead → GREEN: obstacle={LABELS.get(int(jake_hit), str(jake_hit))}, "
+                            f"dist={_fmt_px(obstacle_dist_px)}; target_x={tgt['pos'][0]}")
+                    prev_lane = lane
                     _issue_move_towards_x(jx, tgt["pos"][0], sidewalk_present=sidewalk_present)
+                    if lane != prev_lane:
+                        _register_red_evasion_ban(prev_lane)
 
                 else:
-                    if reds:
-                        # When choosing best_red:
-                        __p_redscore = __PROF('post.red_scoring')
-                        best_red = max(reds, key=_red_score)
-                        __p_redscore()
-                        tx = best_red["pos"][0]
-                        if tx != jx:                      # avoid needless move if staying is best
-                            _issue_move_towards_x(jx, tx, sidewalk_present=sidewalk_present)
+                    # 3) Far YELLOW
+                    tgt = _nearest_x(yellows_far)
+                    if tgt is not None:
+                        if MOVEMENT_ENABLED:
+                            ahead_px = jake_band_y - tgt["pos"][1]
+                            print(f"[MOVE] RED ahead → YELLOW (far): obstacle={LABELS.get(int(jake_hit), str(jake_hit))}, "
+                                f"dist={_fmt_px(obstacle_dist_px)}; yellow_ahead={int(ahead_px)}px (≥{MIN_YELLOW_AHEAD_PX})")
+                        prev_lane = lane
+                        _issue_move_towards_x(jx, tgt["pos"][0], sidewalk_present=sidewalk_present)
+                        if lane != prev_lane:
+                            _register_red_evasion_ban(prev_lane)
+                    else:
+                        # 4) All-red fallback (your existing scoring)
+                        if reds:
+                            __p_redscore = __PROF('post.red_scoring')
+                            best_red = max(reds, key=_red_score)
+                            __p_redscore()
+                            tx = best_red["pos"][0]
+                            if tx != jx:
+                                prev_lane = lane
+                                _issue_move_towards_x(jx, tx, sidewalk_present=sidewalk_present)
+                                if lane != prev_lane:
+                                    _register_red_evasion_ban(prev_lane)
+
+
 
 
                     # else: boxed in → no lateral move this frame
 
         # YELLOW ahead: try GREEN; if none, rely on countermeasures (jump/duck)
         elif _is_warn(jake_hit):
-            tgt = _nearest_x(greens_far)  # only consider far-enough greens
+            tgt = (_nearest_ramp_by_y(hypergreens_far, jake_band_y) or _nearest_x(hypergreens_far) or _nearest_x(greens_far))
             if tgt is not None:
+                # Only pre-arm if this chosen target is the hypergreen jump (class 3)
+                cls = tgt.get("hit_class")
+                if cls is not None and int(cls) == 3:
+                    _prearm_jump_for_triangle(tgt, tgt["idx"], jake_point, tri_rays,
+                                            masks_np, classes_np, H, W)
+
                 _issue_move_towards_x(jx, tgt["pos"][0], sidewalk_present=sidewalk_present)
 
-    # else: no safe far green → hold lane; jump/duck handled above
 
-            # else: no green → hold lane; jumps/ducks already handled above
+
 # ============================================================================
 
 # ============================================================================
@@ -2084,8 +2391,12 @@ def render_overlays(frame_bgr, masks_np, classes_np, rail_mask, green_mask,
     if best_idx is not None and 0 <= best_idx < len(tri_positions):
         xt, yt = tri_positions[best_idx]
 
-        # theta used for that triangle in classify_triangles_at_sample_curved
-        theta_deg = tri_rays[best_idx][2] if best_idx < len(tri_rays) else 0.0
+    
+        theta_deg = tri_rays[best_idx][2] if (best_idx is not None and best_idx < len(tri_rays)) else 0.0
+        dxr, dyr  = unit_from_theta(float(theta_deg))  # use helper, not TRIG_TABLE.get
+        xe = _clampi(int(round(xt + dxr * SAMPLE_UP_PX)), 0, W-1)
+        ye = _clampi(int(round(yt + dyr * SAMPLE_UP_PX)), 0, H-1)
+
 
         dist_px, hit_xy, hit_cls = first_mask_hit_starburst_then_ray(
             jake_point=jake_point,
@@ -2168,8 +2479,6 @@ listener.start()
 sct = mss()
 frame_idx = 0
 
-from mss import mss
-
 if advertisement:
     CHECK_X, CHECK_Y = 1030, 900
 else:
@@ -2232,7 +2541,6 @@ def _labels_for(ids):
 
 # =======================
 
-save_frames = False
 power_metrics = False
 active_replay = False
 times_collection = []
@@ -2243,7 +2551,7 @@ WATCH_SAVE_CLASSES = {10, 7}  # tweak as you like
 
 
 # =======================
-
+lane = 1
 while running:
     frame_start_time = time.perf_counter()
     _prof_reset()
@@ -2252,7 +2560,7 @@ while running:
     # bump SHORTEN_S after 60s of runtime
     elapsed_s = time.perf_counter() - start_time
     if elapsed_s >= 60.0 and elapsed_s <= 62.0 and SHORTEN_S != 0.50:
-        SHORTEN_S = 0.55
+        SHORTEN_S = 0.65
         LUT_S = _compute_lut(SHORTEN_S)
         print(f"[LUT] SHORTEN_S -> {SHORTEN_S:.2f} at t={elapsed_s:.1f}s (LUT_S recomputed)")
 
@@ -2319,7 +2627,7 @@ while running:
 
     if (abs(b - target[0]) <= TOL and
         abs(g - target[1]) <= TOL and
-        abs(r - target[2]) <= TOL) or (b, g, r) == (24, 24, 24):
+        abs(r - target[2]) <= TOL) and frame_idx > 10 or (b, g, r) == (24, 24, 24):
         print(f"Kill-switch triggered at ({CHECK_X},{CHECK_Y})")
         running = False
 
@@ -2356,7 +2664,13 @@ while running:
         on_top_now, timed_out, ot_ms, seen = compute_on_top_state_fast(
             yres, H, W, lane_idx=lane, mask_thresh=0.5
         )
-
+        # ---- 0.3s “no drop” gate after TL lateral tap ---- STICKY
+        if time.monotonic() < tl_sticky_until():
+            # keep running TL; don’t allow TOP -> GROUND flip
+            if not on_top_now:
+                print("[STATE] TL post-lateral sticky → forcing TOP branch for 0.3s")
+            on_top_now = True
+            
         if timed_out:
             # use last stable values instead of "bailing"
             on_top_now = _ONTOP_CACHE["on_top_now"]
@@ -2383,6 +2697,7 @@ while running:
     print(f"Currently lane is {lane}")
 
     if not on_top_now:
+        DONT_MOVE = 0
         # --- Postproc ---
         t0_post = time.perf_counter()
         (tri_best_xy, tri_count, mask_count, to_cpu_ms, post_ms,
@@ -2452,39 +2767,40 @@ while running:
 
 
         times_collection.append(total_elapsed_ms)
-    else:
 
+    else:
+        if DONT_MOVE < 4:
+            print('GUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDED')
+            DONT_MOVE +=1
+            continue
+        
         started_1 = time.perf_counter()
         print("we are on top of train..")
 
-        # Reuse the existing toggle you already have
-        save_analysed = save_frames
-
-        # Top-logic saving is independent of normal overlay saving
+        # Use the same save switch as ground overlays
         seq = meta.get("seq", frame_idx)
-        analysed_path = str(TOP_OUT_DIR / f"top_{int(seq):06d}_analysed.png") if save_top_frames else None
+        analysed_path = str(TOP_OUT_DIR / f"top_{int(seq):06d}_analysed.jpg")
 
         decision = do_top_logic_from_result(
             frame_bgr=frame_bgr,
             yolo_result=yres,
             lane_2=lane,
-            save_analysed=False,        # don’t save inside
-            save_path=None,
+            save_analysed=save_frames,                   # <— respect G / --save
+            save_path=analysed_path if save_frames else None,
             print_prefix=f"[TOP f{frame_idx:05d}] ",
         )
 
-        save_top_frames = False
-        if save_top_frames:
+        # Fallback: if TL returns an image but didn’t save internally, save it here
+        if save_frames and isinstance(decision, dict) and "out_img" in decision and decision["out_img"] is not None:
             out = decision["out_img"].copy()
-            _stamp_lane_badge(out, lane)  # your existing helper in main
-            jpg_path = TOP_OUT_DIR / f"top_{int(seq):06d}_analysed.jpg"
-            cv2.imwrite(str(jpg_path), out, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            _stamp_lane_badge(out, lane)
+            cv2.imwrite(analysed_path, out, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            print(f"[TOP SAVE] {analysed_path}")
 
-
-        # (optional) do something with `decision` here …
         elapsed_TL = time.perf_counter() - started_1
         print(f"Time taken for logic TL is {elapsed_TL * 1000:.2f} ms")
         continue
+
 
 
 # Cleanup
