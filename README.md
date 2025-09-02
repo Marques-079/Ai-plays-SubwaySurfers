@@ -1,3 +1,5 @@
+#CURRENTLY IN PROGRESS (ETC: Before next year 🥴)
+
 # Subway Surfers vs AI 🚃 🚃🏃‍♂️ (🚧)
 
 After being inspired by Youtubers making “AI beats…” content I figured why not make one to beat the hit game Subway Surfers! A lot of thinking and planning went into this project, mainly it consists of an ensemble of models to auto-label, analyse and plan our approach to this challenging environment.
