@@ -152,7 +152,7 @@ My conclusion was an algorithm which determines if he is Air or Ground based off
   </tr>
   <tr>
     <td>
-      <img src="Images/Screenshot%202025-05-040.jpg" width="420"/>
+      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/a05aa49d7c6bbdea133219d810e7ce06cb8786b1/Irrelevant_files/Images/Screenshot%202025-05-038.jpg" width="420"/>
     </td>
   </tr>
 </table>
