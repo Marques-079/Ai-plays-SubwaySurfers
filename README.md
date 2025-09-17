@@ -145,12 +145,12 @@ The decision to use this method instead of hand labelling was driven by the fact
 
 This algortihm took around 50% of the total build time of this project. The GOAL here was a hardcoded model plugged into the CV models and other detection systems which can play the game for around 5-10 mins at a time before dying due to the inadaptability of hardcoded programming. A large amount of time was spent on the the pathing and detecion systems; as the game ramps in speed we have lesser and lesser reaction time before collision. It was a MUST to have the fasted code possible which resulted in the following few changes : 
 
-A) Swapped MSS (Multiple screenshots) for a customer Swift script. Took capture time from 40ms -> 1ms
-B) Used Parsec mirroing between devices for game emulation. Interaction loop 50ms+ -> 10ms 
-C) General optimisation of code for speed and efficiency. 200ms -> 60ms 
-D) Togglable frame saves -> 550ms -> 180ms
+• Swapped MSS (Multiple screenshots) for a customer Swift script. Took capture time from 40ms -> 1ms <br>
+• Used Parsec mirroing between devices for game emulation. Interaction loop 50ms+ -> 10ms <br>
+• General optimisation of code for speed and efficiency. 200ms -> 60ms <br>
+• Togglable frame saves -> 550ms -> 180ms <br>
 
-### This led to an 83% time save for the frame analysis loop
+This led to an 83% time save for the frame analysis loop
 
 Screenshots below using hardcoded frame analysis. 
 
@@ -158,104 +158,6 @@ Screenshots below using hardcoded frame analysis.
 
 The back bone of this Algorithm put VERY simply is, knowing what lane you are in + on ground of ontop of trains (diff logic applied) -> Upcoming obstacle? Set evasive timer -> Move 
 ---
-## 🧭 Frame Analysis — Logic Network
-
-```mermaid
-flowchart LR
-  %% ---------- Styles ----------
-  classDef cap  fill:#0ea5e9,stroke:#0369a1,color:#fff;     %% Capture
-  classDef inf  fill:#d946ef,stroke:#a21caf,color:#fff;     %% Inference
-  classDef post fill:#f59e0b,stroke:#b45309,color:#111;     %% Postproc (ground)
-  classDef dec  fill:#22c55e,stroke:#15803d,color:#111;     %% Decision
-  classDef out  fill:#3b82f6,stroke:#1d4ed8,color:#fff;     %% Outputs
-  classDef top  fill:#fde68a,stroke:#92400e,color:#111;     %% On-top branch
-  classDef aux  fill:#cbd5e1,stroke:#475569,color:#111;     %% Aux/infra
-  linkStyle default stroke:#64748b,stroke-width:2px;
-
-  %% ---------- Capture ----------
-  subgraph CAPTURE
-    cap1["ring_grab → frame_bgr"]:::cap
-    cap2["Kill-switch pixel check (mss)"]:::cap
-    cap3["Lane detect by whiteness"]:::cap
-    cap4["Boot-time save toggle (G / Quartz)"]:::cap
-    cap5["Movement mute window (0.5s → mute → unmute)"]:::cap
-    cap6["Percent-of-color RGBA gauge"]:::cap
-  end
-
-  %% ---------- Inference ----------
-  subgraph INFERENCE
-    inf1["YOLO(segment).predict"]:::inf
-    inf2["Device select (CUDA/MPS/CPU) + half"]:::inf
-    inf3["Model fuse + warmup"]:::inf
-    inf4["compute_on_top_state_fast()"]:::inf
-    inf5["OnTopTracker (train/ramp/rails debounce)"]:::inf
-  end
-
-  cap1 --> cap2 --> cap3 --> cap4 --> cap5 --> cap6 --> inf1 --> inf2 --> inf3 --> inf4 --> inf5
-
-  %% ---------- On-top gate ----------
-  gate{ON_TOP ?}
-  inf5 --> gate
-
-  %% ---------- Ground post-proc ----------
-  subgraph GROUND_POSTPROC["GROUND — post-processing"]
-    post1["process_frame_post()"]:::post
-    post2["Promote lowbarrier (HSV wall)"]:::post
-    post3["Rails union → GREEN highlight"]:::post
-    post4["Heatmap → purple triangles"]:::post
-    post5["Pick by bearing (Jake lane)"]:::post
-    post6["Curved rays → hit class & dist"]:::post
-    post7["Green→Red relabel (near-Y)"]:::post
-    post8["Side→Mid flip (ray-tip distance)"]:::post
-    post9["tri_summary"]:::post
-  end
-
-  gate -- "No" --> post1
-  post1 --> post2 --> post3 --> post4 --> post5 --> post6 --> post7 --> post8 --> post9
-
-  %% ---------- Decision logic ----------
-  subgraph DECISION_LOGIC
-    dec1["Jake-lane impact timers<br/>(starburst→ray for JUMP/DUCK)"]:::dec
-    dec2["Tokenized timer + LUT (px→s)"]:::dec
-    dec3["Lateral pathing:<br/>RED → HYPERGREEN → GREEN → far YELLOW → least-bad RED"]:::dec
-    dec4["Re-entry ban (hysteresis, windowed)"]:::dec
-    dec5["Lane change (left/right) + sidewalk jump→duck"]:::dec
-  end
-
-  post9 --> dec1 --> dec2 --> dec3 --> dec4 --> dec5
-
-  %% ---------- Outputs ----------
-  subgraph OUTPUTS["Actions & outputs"]
-    out1["pyautogui actions"]:::out
-    out2["pause_inference / cooldown"]:::out
-    out3["Overlay render + selective save"]:::out
-    out4["Replay dump (optional)"]:::out
-    out5["Timing + micro-prof summary"]:::out
-  end
-
-  dec5 --> out1 --> out2 --> out3 --> out4 --> out5
-
-  %% ---------- Top branch ----------
-  subgraph TOP_BRANCH["TOP — train/ramp flow"]
-    top1["do_top_logic_from_result(TL_modular)"]:::top
-    top2["Sticky guard (no drop 0.3s)"]:::top
-    top3["Save analysed frame (optional)"]:::top
-  end
-
-  gate -- "Yes" --> top1 --> top2 --> top3
-
-  %% ---------- Aux / Infra ----------
-  subgraph AUX_INFRA["Aux / infra"]
-    aux1["Global mute (--quiet/--silent)"]:::aux
-    aux2["Warnings/logging off; dprint lazy debug"]:::aux
-    aux3["LUT bump after 60s runtime"]:::aux
-    aux4["Resource monitors (CPU/RAM/GPU)"]:::aux
-    aux5["G toggle to save overlays"]:::aux
-  end
-
-```
----
-
 
 # CNN and Transformer training 🚗🔄🤖
 
