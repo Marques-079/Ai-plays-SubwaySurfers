@@ -158,8 +158,8 @@ This led to an 83% time save for the frame analysis loop
   <tr>
     <td><img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/49844e1ad160993b3158caebee99bdb0ca9dc376/Irrelevant_files/Images/ssproc6.png" alt="Image 1" width="100%"></td>
     <td><img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/49844e1ad160993b3158caebee99bdb0ca9dc376/Irrelevant_files/Images/ssproc5.png" alt="Image 2" width="100%"></td>
-    <td><img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/49844e1ad160993b3158caebee99bdb0ca9dc376/Irrelevant_files/Images/ssproc4.png" alt="Image 3" width="100%"></td>
-    <td><img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/49844e1ad160993b3158caebee99bdb0ca9dc376/Irrelevant_files/Images/ssproc2.png" alt="Image 4" width="100%"></td>
+    <td><img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/49844e1ad160993b3158caebee99bdb0ca9dc376/Irrelevant_files/Images/ssproc2.png" alt="Image 3" width="100%"></td>
+    <td><img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/49844e1ad160993b3158caebee99bdb0ca9dc376/Irrelevant_files/Images/ssproc4.png" alt="Image 4" width="100%"></td>
   </tr>
 </table>
 
