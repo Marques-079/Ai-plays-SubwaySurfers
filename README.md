@@ -4,6 +4,8 @@
 
 After being inspired by Youtubers making “AI beats…” content I figured why not make one to beat the hit game Subway Surfers! A lot of thinking and planning went into this project, mainly it consists of an ensemble of models to auto-label, analyse and plan our approach to this challenging environment.
 
+#TODO INSERT GIFS
+
 # How the model works⁉️
 
 **Data pipeline:** Firstly we must extract key frames from videos and label them for the transformer model, my goal is to label around 1 million+ frames for training data. This is achieved through TWO computer vision models fine tuned off Ultralytics open source models. 
@@ -49,8 +51,6 @@ My first thought was to quantise the image into smaller pixels and through this 
     </td>
   </tr>
 </table>
-
-
 
 Initial thoughts on how we could detect obstacles. 
 
@@ -134,37 +134,126 @@ The decision to use this method instead of hand labelling was driven by the fact
 
 ---
 
-
 # The greedy algorithm  👹
 
-Now comes arguably the hardest part of this process, making an auto labeller which runs at “efficient speeds” of under 500ms per image and maintains an exceptionally high accuracy in greedy decision making. In my mind there was two game states I had to code for. Jake in the Air and Jake on the ground. On the ground he should play obstacle avoidance and stay on rails (if not on rails he would have crashed), and if on trains we should aim to jump from train to train. Also implementing a movement cooldown after a move would be paramount to eliminating sudden erros.
+### Visualisation of logic network for executing logic 
 
-My conclusion was an algorithm which determines if he is Air or Ground based off height, this can be paired with a standing on algorithm to yield accurate results. When working on rails we would also have to be able to identify possible moves. How the greedy algorithm works for game state: ground is that it tracks forward the rails it has identified, and then attempts to move into the one with the highest longevity (ignore no kill obstacles eg.  low barriers). 
+<p align="center">
+  <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/59dbedd091266dcb2f6f0e9d392c5f8a6cf963be/Irrelevant_files/Images/Network%20for%20subnway.png"
+       width="2000"  alt="gif1">
+</p>
 
-<table>
-  <tr>
-    <td>
-      <img src="Images/Screenshot%202025-05-038.jpg" width="420"/>
-    </td>
-    <td rowspan="2">
-      <img src="Images/Screenshot%202025-05-039.jpg" width="460"/>
-    </td>
-  </tr>
-  <tr>
-    <td>
-      <img src="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/a05aa49d7c6bbdea133219d810e7ce06cb8786b1/Irrelevant_files/Images/Screenshot%202025-05-038.jpg" width="420"/>
-    </td>
-  </tr>
-</table>
+This algortihm took around 50% of the total build time of this project. The GOAL here was a hardcoded model plugged into the CV models and other detection systems which can play the game for around 5-10 mins at a time before dying due to the inadaptability of hardcoded programming. A large amount of time was spent on the the pathing and detecion systems; as the game ramps in speed we have lesser and lesser reaction time before collision. It was a MUST to have the fasted code possible which resulted in the following few changes : 
 
+A) Swapped MSS (Multiple screenshots) for a customer Swift script. Took capture time from 40ms -> 1ms
+B) Used Parsec mirroing between devices for game emulation. Interaction loop 50ms+ -> 10ms 
+C) General optimisation of code for speed and efficiency. 200ms -> 60ms 
+D) Togglable frame saves -> 550ms -> 180ms
 
+### This led to an 83% time save for the frame analysis loop
 
-- Bottom left image says “Jake is on the ground” - Airtime algorithm
+Screenshots below using hardcoded frame analysis. 
 
-Valid ground pathing is found by combining matching colours within the identified mask for rails this prevents colours that match rails, but aren’t rails to being identified. The downside is that if our algorithm fails then we will be running blind. This reliance could be a bad thing. 
+#TODO INSERT DEVS IMAGES
 
-<br>
+The back bone of this Algorithm put VERY simply is, knowing what lane you are in + on ground of ontop of trains (diff logic applied) -> Upcoming obstacle? Set evasive timer -> Move 
+---
+## 🧭 Frame Analysis — Logic Network
 
+```mermaid
+flowchart LR
+  %% ---------- Styles ----------
+  classDef cap  fill:#0ea5e9,stroke:#0369a1,color:#fff;     %% Capture
+  classDef inf  fill:#d946ef,stroke:#a21caf,color:#fff;     %% Inference
+  classDef post fill:#f59e0b,stroke:#b45309,color:#111;     %% Postproc (ground)
+  classDef dec  fill:#22c55e,stroke:#15803d,color:#111;     %% Decision
+  classDef out  fill:#3b82f6,stroke:#1d4ed8,color:#fff;     %% Outputs
+  classDef top  fill:#fde68a,stroke:#92400e,color:#111;     %% On-top branch
+  classDef aux  fill:#cbd5e1,stroke:#475569,color:#111;     %% Aux/infra
+  linkStyle default stroke:#64748b,stroke-width:2px;
+
+  %% ---------- Capture ----------
+  subgraph CAPTURE
+    cap1["ring_grab → frame_bgr"]:::cap
+    cap2["Kill-switch pixel check (mss)"]:::cap
+    cap3["Lane detect by whiteness"]:::cap
+    cap4["Boot-time save toggle (G / Quartz)"]:::cap
+    cap5["Movement mute window (0.5s → mute → unmute)"]:::cap
+    cap6["Percent-of-color RGBA gauge"]:::cap
+  end
+
+  %% ---------- Inference ----------
+  subgraph INFERENCE
+    inf1["YOLO(segment).predict"]:::inf
+    inf2["Device select (CUDA/MPS/CPU) + half"]:::inf
+    inf3["Model fuse + warmup"]:::inf
+    inf4["compute_on_top_state_fast()"]:::inf
+    inf5["OnTopTracker (train/ramp/rails debounce)"]:::inf
+  end
+
+  cap1 --> cap2 --> cap3 --> cap4 --> cap5 --> cap6 --> inf1 --> inf2 --> inf3 --> inf4 --> inf5
+
+  %% ---------- On-top gate ----------
+  gate{ON_TOP ?}
+  inf5 --> gate
+
+  %% ---------- Ground post-proc ----------
+  subgraph GROUND_POSTPROC["GROUND — post-processing"]
+    post1["process_frame_post()"]:::post
+    post2["Promote lowbarrier (HSV wall)"]:::post
+    post3["Rails union → GREEN highlight"]:::post
+    post4["Heatmap → purple triangles"]:::post
+    post5["Pick by bearing (Jake lane)"]:::post
+    post6["Curved rays → hit class & dist"]:::post
+    post7["Green→Red relabel (near-Y)"]:::post
+    post8["Side→Mid flip (ray-tip distance)"]:::post
+    post9["tri_summary"]:::post
+  end
+
+  gate -- "No" --> post1
+  post1 --> post2 --> post3 --> post4 --> post5 --> post6 --> post7 --> post8 --> post9
+
+  %% ---------- Decision logic ----------
+  subgraph DECISION_LOGIC
+    dec1["Jake-lane impact timers<br/>(starburst→ray for JUMP/DUCK)"]:::dec
+    dec2["Tokenized timer + LUT (px→s)"]:::dec
+    dec3["Lateral pathing:<br/>RED → HYPERGREEN → GREEN → far YELLOW → least-bad RED"]:::dec
+    dec4["Re-entry ban (hysteresis, windowed)"]:::dec
+    dec5["Lane change (left/right) + sidewalk jump→duck"]:::dec
+  end
+
+  post9 --> dec1 --> dec2 --> dec3 --> dec4 --> dec5
+
+  %% ---------- Outputs ----------
+  subgraph OUTPUTS["Actions & outputs"]
+    out1["pyautogui actions"]:::out
+    out2["pause_inference / cooldown"]:::out
+    out3["Overlay render + selective save"]:::out
+    out4["Replay dump (optional)"]:::out
+    out5["Timing + micro-prof summary"]:::out
+  end
+
+  dec5 --> out1 --> out2 --> out3 --> out4 --> out5
+
+  %% ---------- Top branch ----------
+  subgraph TOP_BRANCH["TOP — train/ramp flow"]
+    top1["do_top_logic_from_result(TL_modular)"]:::top
+    top2["Sticky guard (no drop 0.3s)"]:::top
+    top3["Save analysed frame (optional)"]:::top
+  end
+
+  gate -- "Yes" --> top1 --> top2 --> top3
+
+  %% ---------- Aux / Infra ----------
+  subgraph AUX_INFRA["Aux / infra"]
+    aux1["Global mute (--quiet/--silent)"]:::aux
+    aux2["Warnings/logging off; dprint lazy debug"]:::aux
+    aux3["LUT bump after 60s runtime"]:::aux
+    aux4["Resource monitors (CPU/RAM/GPU)"]:::aux
+    aux5["G toggle to save overlays"]:::aux
+  end
+
+```
 ---
 
 
