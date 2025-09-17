@@ -143,7 +143,9 @@ The decision to use this method instead of hand labelling was driven by the fact
        width="2000"  alt="gif1">
 </p>
 
-This algortihm took around 50% of the total build time of this project. The GOAL here was a hardcoded model plugged into the CV models and other detection systems which can play the game for around 5-10 mins at a time before dying due to the inadaptability of hardcoded programming. A large amount of time was spent on the the pathing and detecion systems; as the game ramps in speed we have lesser and lesser reaction time before collision. It was a MUST to have the fasted code possible which resulted in the following few changes : 
+This algortihm took around 50% of the total build time of this project. The GOAL here was a hardcoded model plugged into the CV models and other detection systems which can play the game for around 5-10 mins at a time before dying due to the inadaptability of hardcoded programming. 
+
+A large amount of time was spent on the the pathing and detecion systems; as the game ramps in speed we have lesser and lesser reaction time before collision. It was a MUST to have the fasted code possible which resulted in the following few changes : 
 
 • Swapped MSS (Multiple screenshots) for a customer Swift script. Took capture time from 40ms -> 1ms <br>
 • Used Parsec mirroing between devices for game emulation. Interaction loop 50ms+ -> 10ms <br>
@@ -152,11 +154,16 @@ This algortihm took around 50% of the total build time of this project. The GOAL
 
 This led to an 83% time save for the frame analysis loop
 
-Screenshots below using hardcoded frame analysis. 
+
+
 
 #TODO INSERT DEVS IMAGES
 
-The back bone of this Algorithm put VERY simply is, knowing what lane you are in + on ground of ontop of trains (diff logic applied) -> Upcoming obstacle? Set evasive timer -> Move 
+
+
+
+The back bone of this Algorithm put VERY simply is, knowing what lane you are in + on ground of ontop of trains (diff logic applied) -> Upcoming obstacle? Set evasive timer -> Move **
+
 ---
 
 # CNN and Transformer training 🚗🔄🤖
