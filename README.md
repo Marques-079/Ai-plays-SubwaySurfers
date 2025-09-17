@@ -20,35 +20,34 @@ These models identify obstacles and our play and thus, act as the eyes and sense
 <table>
   <tr>
     <!-- Left image (unchanged) -->
-    <td width="50%">
-      <img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03.jpg" alt="Image 1" width="100%">
+    <td style="width:50%;vertical-align:top;">
+      <img src="https://raw.githubusercontent.com/Marques-079/Ai-plays-SubwaySurfers/30665ba9d212de2fdb5ce993e7af52ea215c47f2/Images/2025-05-03.jpg" alt="Image 1" style="width:100%;">
     </td>
-    <!-- Right image (cropped: remove 1/3 on both sides + 10% bottom) -->
-    <td width="50%">
+    <!-- Right image (cropped: remove 1/3 on both sides + bottom 10%) -->
+    <td style="width:50%;vertical-align:top;">
       <svg
-        width="100%"
-        viewBox="0 0 16 9"
+        width="100%" viewBox="0 0 16 9"
         xmlns="http://www.w3.org/2000/svg"
         xmlns:xlink="http://www.w3.org/1999/xlink"
         preserveAspectRatio="xMidYMid slice"
         role="img" aria-label="Image 2 (cropped)">
-        <title>Image 2 (cropped)</title>
         <defs>
-          <!-- clip to middle third (x=1/3, width=1/3) and top 90% (height=0.9) -->
+          <!-- middle third horizontally (x=1/3, w=1/3) and top 90% vertically (h=0.9) -->
           <clipPath id="midThirdCrop" clipPathUnits="objectBoundingBox">
-            <rect x="0.3333" y="0.0" width="0.3334" height="0.9"/>
+            <rect x="0.3333333" y="0" width="0.3333334" height="0.9"/>
           </clipPath>
         </defs>
         <image
           x="0" y="0" width="100%" height="100%"
           clip-path="url(#midThirdCrop)"
           preserveAspectRatio="xMidYMid slice"
-          href="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/5e0c987ff35bfe41fe537fabe222e4767154dfe4/Irrelevant_files/Images/gifforsubway1-ezgif.com-video-to-gif-converter.gif"
-          xlink:href="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/5e0c987ff35bfe41fe537fabe222e4767154dfe4/Irrelevant_files/Images/gifforsubway1-ezgif.com-video-to-gif-converter.gif" />
+          href="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/e4c69b3364a54e91a053f2fc55b39d5cb180ed0e/Irrelevant_files/Images/gifforsubway1-ezgif.com-video-to-gif-converter.gif"
+          xlink:href="https://github.com/Marques-079/Ai-plays-SubwaySurfers/blob/e4c69b3364a54e91a053f2fc55b39d5cb180ed0e/Irrelevant_files/Images/gifforsubway1-ezgif.com-video-to-gif-converter.gif" />
       </svg>
     </td>
   </tr>
 </table>
+
 
 
 **Dual models :**  I run real time analysis on our gameplay using a screen overlay, essentially while this runs I have a Convolutional Neural Network (CNN) which acts as an encoder for our transformer model. To train we use our 1 million+ frames (run through CNN) and then passed to our transformer. The goal here is to establish a baseline adaptable model that not only uses context of 16 frames but also can string together combos (greedy could not). 
