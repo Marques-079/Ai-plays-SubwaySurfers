@@ -10,7 +10,7 @@ from typing import List, Dict, Tuple, Optional
 # ===================== MASTER FEATURE GUARD =====================
 # When False: disable ALL overlays (drawing) and disk writes.
 # Computation & decisions still run identically.
-SAVES_ON = True
+SAVES_ON = False
 # ===============================================================
 # --- jump cooldown (non-blocking) ---
 _JUMP_CD_UNTIL = 0.0          # monotonic seconds; prevents repeated jumps
@@ -42,7 +42,7 @@ def _ltl_try_tap(key: str) -> bool:
         return False
     pyautogui.press(key)
 
-    time.sleep(0.213)
+    time.sleep(0.3)
 
     _LTL_LAST_TAP_TS = now
     # start the TOP stickiness window
@@ -107,7 +107,7 @@ YELLOW_PROBE_THICK = 2      # half-width (x) around the tip for probe hit test
 _scan_persist_active = False
 
 # Lateral move activation gate
-LAT_MOVE_Y_THRESH_PX = 600  # active when arrow length (dy) < this
+LAT_MOVE_Y_THRESH_PX = 500  # active when arrow length (dy) < this
 lat_move_active = False
 
 
@@ -1137,7 +1137,7 @@ def run_top_logic_on_frame(
                 _JUMP_CD_UNTIL = nowm + 0.45  # cooldown (tune as needed)
 
 
-                time.sleep(0.719)
+                time.sleep(0.79)
 
 
             except Exception as e:

@@ -1167,7 +1167,7 @@ def percent_of_color_rgba(img, rgba=(210, 36, 35, 255), tol_frac=0.05):
 LOWBARRIER1_ID   = 4
 ORANGETRAIN_ID   = 6
 WALL_STRIP_PX    = 14          # vertical strip height checked just above the barrier
-WALL_MATCH_FRAC  = 0.12       # % of “wall” pixels required to relabel
+WALL_MATCH_FRAC  = 0.135       # % of “wall” pixels required to relabel
 WALL_ORANGE_LO = np.array([5,  80,  60], dtype=np.uint8)   # H,S,V (lo)
 WALL_ORANGE_HI = np.array([35, 255, 255], dtype=np.uint8)  # H,S,V (hi)
 
