@@ -10,7 +10,7 @@ from typing import List, Dict, Tuple, Optional
 # ===================== MASTER FEATURE GUARD =====================
 # When False: disable ALL overlays (drawing) and disk writes.
 # Computation & decisions still run identically.
-SAVES_ON = False
+SAVES_ON = True
 # ===============================================================
 # --- jump cooldown (non-blocking) ---
 _JUMP_CD_UNTIL = 0.0          # monotonic seconds; prevents repeated jumps

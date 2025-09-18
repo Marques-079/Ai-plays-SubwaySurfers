@@ -386,29 +386,90 @@ def _allowed_and_pillar_stats(classes_np):
     pillar_count = int(counts[uniq == ID_PILLAR].sum()) if np.any(uniq == ID_PILLAR) else 0
     return bool(allowed_only), pillar_count, uniq
 
+
+# --- minimal helper: pause if the largest RAMP mask is > 28% of the screen ---
+def pause_if_big_ramp(yres, ramp_id=ID_RAMP, thr_frac=0.28, sleep_s=1.0) -> bool:
+    """
+    Checks the largest RAMP instance area on the mask grid (proportional to screen area).
+    If coverage > thr_frac, sleep(sleep_s). Returns True if slept.
+    """
+    try:
+        mobj = getattr(yres, "masks", None)
+        if mobj is None or getattr(mobj, "data", None) is None:
+            return False
+
+        # classes for each mask (prefer masks.cls if present; else boxes.cls)
+        if getattr(mobj, "cls", None) is not None:
+            cls_np = mobj.cls.detach().cpu().numpy().astype(int, copy=False)
+        else:
+            cls_np = yres.boxes.cls.detach().cpu().numpy().astype(int, copy=False)
+
+        ramp_idxs = np.where(cls_np == int(ramp_id))[0]
+        if ramp_idxs.size == 0:
+            return False
+
+        m = mobj.data  # torch.Tensor [n, mh, mw] (device: cpu/cuda/mps)
+        import torch
+        idx = torch.as_tensor(ramp_idxs, device=m.device, dtype=torch.long)
+        sub = m.index_select(0, idx)
+
+        # threshold and count on-device; compare to mask grid area
+        max_area = (sub > 0.5).sum(dim=(1, 2)).amax().item()
+        mh, mw = sub.shape[-2], sub.shape[-1]
+        frac = float(max_area) / float(mh * mw)
+
+        if frac > thr_frac:  # strictly greater than 28%
+            print(f"[RAMP-PAUSE] Largest RAMP covers {frac*100:.1f}% > {thr_frac*100:.0f}% → pausing {sleep_s:.2f}s")
+            time.sleep(sleep_s)
+            return True
+        return False
+    except Exception as _e:
+        # stay silent on failure; keep loop going
+        return False
+
+
+def red_ahead_from_overlay(best_idx, tri_hit_classes, tri_colours) -> bool:
+    if best_idx is None:
+        return False
+    # 1) If classifier said the Jake triangle hits a DANGER_RED class
+    if 0 <= best_idx < len(tri_hit_classes):
+        cid = tri_hit_classes[best_idx]
+        if cid is not None and int(cid) in DANGER_RED:
+            return True
+    # 2) Respect any post flips that made it red in the overlay
+    if 0 <= best_idx < len(tri_colours):
+        # COLOR_RED is (0, 0, 255) in your code
+        return tuple(tri_colours[best_idx]) == COLOR_RED
+    return False
+
 def pillar_evasion_check_and_act(H: int, W: int,
                                  masks_np: np.ndarray,
                                  classes_np: np.ndarray,
-                                 JAKE_POINT: tuple[int,int]) -> bool:
+                                 JAKE_POINT: tuple[int,int],
+                                 *,
+                                 red_ahead_overlay: bool | None = None) -> bool:
+
     global _synth_block_until, last_move_ts, lane
 
     # --- diagnostics (always printed when this check runs) ---
     allowed_only, pillar_cnt, uniq = _allowed_and_pillar_stats(classes_np)
     in_side_lane = lane in (0, 2)
-    red_ahead    = _lane_red_straight_ahead(JAKE_POINT, masks_np, classes_np, H, W)  # cached for both log + guard
+    red_ahead = bool(red_ahead_overlay)
     move_ok      = MOVEMENT_ENABLED
 
     # Original semantics require: ≥1 pillar present AND only allowed classes
     targets_ok = allowed_only and (pillar_cnt >= 1)
 
     dlog("PILLAR_GUARDS",
-         only_targets=allowed_only,         # (1) “Only target masks found”
-         pillar_cnt=pillar_cnt,
-         pillars_gt1=(pillar_cnt >= 2),     # (2) “Pillar > 1 present”
-         targets_ok=targets_ok,
-         in_side_lane=in_side_lane,
-         red_ahead=red_ahead,
-         move_enabled=move_ok)
+     only_targets=allowed_only,
+     pillar_cnt=pillar_cnt,
+     pillars_gt1=(pillar_cnt >= 2),
+     targets_ok=targets_ok,
+     in_side_lane=in_side_lane,
+     red_ahead=red_ahead,
+     #red_ahead_vert=red_ahead_vert,   # ← debug-only
+     move_enabled=move_ok)
+
 
     # --- original guards (unchanged logic) ---
     if classes_np is None or classes_np.size == 0:  return False
@@ -2234,6 +2295,10 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                         f"dist={_fmt_px(obstacle_dist_px)}; target_x={tgt['pos'][0]}")
                 prev_lane = lane
                 _issue_move_towards_x(jx, tgt["pos"][0], sidewalk_present=sidewalk_present)
+
+                # if int(tgt.get("hit_class", -1)) == ID_RAMP:   # 8
+                #     pause_inference(1.5)  # or: time.sleep(2.0)
+
                 if lane != prev_lane:
                     _register_red_evasion_ban(prev_lane)
 
@@ -2291,6 +2356,9 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                                             masks_np, classes_np, H, W)
 
                 _issue_move_towards_x(jx, tgt["pos"][0], sidewalk_present=sidewalk_present)
+
+                # if int(tgt.get("hit_class", -1)) == ID_RAMP:   # 8
+                #     pause_inference(1.5)  # or: time.sleep(2.0)
 
 
 
@@ -2657,6 +2725,8 @@ while running:
     infer_ms = (time.perf_counter() - t0_inf) * 1000.0
     yres = res_list[0]
 
+    #pause_if_big_ramp(yres)  # ← sleep 1.0s if the biggest RAMP > 28% of screen
+
 
     _p_GROUND_OR_TOP = __PROF('on_top.state')
     H, W = frame_bgr.shape[:2]
@@ -2704,10 +2774,14 @@ while running:
         masks_np, classes_np, rail_mask, green_mask, tri_positions, tri_colours,
         tri_rays, best_idx, best_deg, x_ref,
         tri_hit_classes, tri_summary) = process_frame_post(frame_bgr, yres, JAKE_POINT)
+
+        red_ahead_overlay = red_ahead_from_overlay(best_idx, tri_hit_classes, tri_colours)
+
         postproc_ms = (time.perf_counter() - t0_post) * 1000.0
 
         # ===================== PILLAR-EVASION FAST CHECK =====================
-        if pillar_evasion_check_and_act(H, W, masks_np, classes_np, JAKE_POINT):
+        if pillar_evasion_check_and_act(H, W, masks_np, classes_np, JAKE_POINT,red_ahead_overlay=red_ahead_overlay):
+
             # Optional: skip the rest of the heavy path this frame to keep overhead minimal.
             times_collection.append((time.perf_counter() - frame_start_time) * 1000.0)
             continue
