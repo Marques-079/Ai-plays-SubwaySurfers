@@ -12,13 +12,6 @@ from typing import List, Dict, Tuple, Optional
 # Computation & decisions still run identically.
 SAVES_ON = False
 # ===============================================================
-# --- jump cooldown (non-blocking) ---
-_JUMP_CD_UNTIL = 0.0          # monotonic seconds; prevents repeated jumps
-JUMP_KEY = "up"               # centralize jump key name
-
-# Jump gate: only allow jump if a TRAIN appears after rails within this many pixels
-NEXT_TRAIN_MAX_PX = 500
-
 
 # --- movement output (pyautogui) for lateral_TL only ---
 try:
@@ -183,78 +176,6 @@ LANE_RAYS = {
 }
 
 # ----------------- Helpers (identical logic) -----------------
-
-def _next_mask_after_rails_from_tip(
-    tip_xy: Tuple[int, int],
-    rays_for_lane: List[Dict],
-    class_map: np.ndarray,
-    rails_map: np.ndarray,
-    step_px: int = RAY_STEP_PX,
-    max_px: Optional[int] = None
-) -> List[Dict[str, object]]:
-    """
-    For each ray in the current lane, march from the yellow tip upward:
-      1) advance until you hit rails
-      2) continue while on rails
-      3) return the first non-rail class encountered (or None)
-
-    Returns a list of dicts: {ray, class, xy, t}
-    """
-    H, W = class_map.shape[:2]
-    out: List[Dict[str, object]] = []
-
-    for ray in rays_for_lane:
-        ang = float(ray.get("angle_deg", -90.0))
-        r   = math.radians(ang)
-        dx, dy = math.sin(r), -math.cos(r)  # up-ish
-        # search budget along this ray
-        budget = int(ray.get("length", 1000))
-        if max_px is not None:
-            budget = min(budget, int(max_px))
-
-        t = step_px
-        hit_x = hit_y = None
-
-        # 1) walk until we are ON rails (if tip isn't yet touching rails)
-        while t <= budget:
-            x = _clampi(int(round(tip_xy[0] + dx * t)), 0, W-1)
-            y = _clampi(int(round(tip_xy[1] + dy * t)), 0, H-1)
-            if rails_map[y, x]:
-                hit_x, hit_y = x, y
-                break
-            t += step_px
-
-        if hit_x is None:
-            out.append({"ray": ray["name"], "class": None, "xy": None, "t": None})
-            continue
-
-        # 2) continue while ON rails
-        while t <= budget:
-            x = _clampi(int(round(tip_xy[0] + dx * t)), 0, W-1)
-            y = _clampi(int(round(tip_xy[1] + dy * t)), 0, H-1)
-            if not rails_map[y, x]:
-                break
-            t += step_px
-
-        # 3) first non-rail mask after rails end
-        found = None
-        while t <= budget:
-            x = _clampi(int(round(tip_xy[0] + dx * t)), 0, W-1)
-            y = _clampi(int(round(tip_xy[1] + dy * t)), 0, H-1)
-            cid = int(class_map[y, x])
-            if cid >= 0 and cid != 9:  # ignore rails & empty
-                found = {"ray": ray["name"], "class": cid, "xy": (x, y), "t": float(t)}
-                break
-            t += step_px
-
-        if found is None:
-            out.append({"ray": ray["name"], "class": None, "xy": None, "t": None})
-        else:
-            out.append(found)
-
-    return out
-
-
 
 def _is_on_ramp_now(lane_idx: int,
                     rays_for_lane: List[Dict],
@@ -749,8 +670,6 @@ def run_top_logic_on_frame(
     save_path: Optional[str] = None,
     print_prefix: str = ""
 ) -> Dict[str, object]:
-
-    global _JUMP_CD_UNTIL
     """
     Executes the exact 'script2' logic on a single frame using precomputed masks/classes.
     Returns a dict with decision info; optionally saves the annotated frame.
@@ -1006,12 +925,8 @@ def run_top_logic_on_frame(
 
     rays_for_lane = LANE_RAYS.get(lane_2, [])
 
-    # 4) LATERAL-THEN-JUMP ARBITRATION (only jump if no lateral is possible)
-
-    rays_for_lane = LANE_RAYS.get(lane_2, [])
-
-    # 4a) Compute rails probe (DO NOT ACT YET)
-    probe_hit = False
+    # 4a) Gate: yellow-arrow vertical probe touching rails → turn on persistence
+    global _scan_persist_active
     if target is not None:
         probe_hit = _rails_hit_vertical_probe(
             rails_map,
@@ -1022,62 +937,23 @@ def run_top_logic_on_frame(
             out_img=out if do_overlays else None
         )
         _p(pfx, f"[probe] tip={target} len={YELLOW_PROBE_LEN} thick={YELLOW_PROBE_THICK} rails_hit={probe_hit}")
-    else:
-        _p(pfx, "[probe] skipped: no target")
-    
-    # (NEW) sample "next scene after rails" along the lane's predefined rays
-    next_after_rails = None
-    if probe_hit and target is not None:
-        next_after_rails = _next_mask_after_rails_from_tip(
-            tip_xy=target,
-            rays_for_lane=rays_for_lane,
-            class_map=class_map,
-            rails_map=rails_map,
-            step_px=RAY_STEP_PX,
-            max_px=None  # per-ray length budget
-        )
-        for rec in next_after_rails:
-            cname = LABELS.get(rec["class"], rec["class"])
-            _p(pfx, f"[after-rails] {rec['ray']}: next={cname} @ {rec['xy']} t≈{rec['t']}")
-    else:
-        _p(pfx, "[after-rails] skipped (no rails at tip or no target)")
 
-    
-     # (NEW) sample "next scene after rails" along the lane's predefined rays
-        # Gate: only jump if next non-rail on PRIMARY ray is a TRAIN within threshold
-    next_train_ok = False
-    next_train_dist = None
-    next_train_label = None
-    next_train_primary_ray = PRIMARY_RAY_FOR_LANE.get(lane_2, "MID")
-
-    if probe_hit and next_after_rails:
-        rec_primary = next((r for r in next_after_rails if r["ray"] == next_train_primary_ray), None)
-        if rec_primary and rec_primary["class"] is not None:
-            next_train_label = LABELS.get(int(rec_primary["class"]), rec_primary["class"])
-            if rec_primary["t"] is not None:
-                next_train_dist = float(rec_primary["t"])
-            if (int(rec_primary["class"]) in TRAIN_CLASSES) and (next_train_dist is not None) and (next_train_dist <= NEXT_TRAIN_MAX_PX):
-                next_train_ok = True
-
-    # OBVIOUS readout
-    if probe_hit:
-        dist_txt = "NA" if next_train_dist is None else f"{int(round(next_train_dist))} px"
-        decision_txt = "JUMP-OK" if next_train_ok else "NO-JUMP"
-        _p(pfx, f"##### NEXT-AFTER-RAILS [{next_train_primary_ray}] -> {next_train_label or 'None'} at {dist_txt} | gate ≤{NEXT_TRAIN_MAX_PX}px => {decision_txt} #####")
-    else:
-        next_train_ok = False  # no rails → definitely no jump by this new rule
+        if probe_hit:
+            _scan_persist_active = True
+            _p(pfx, "[scan] persistence ON (reason=yellow-probe-rails)")
+            scan_reason = "yellow-probe-rails"
+        elif not SCAN_PERSIST:
+            # If persistence is disabled, only scan on frames that probe hits
+            _scan_persist_active = False
+            _p(pfx, "[scan] persistence OFF (probe miss & SCAN_PERSIST=False)")
 
 
-
-    # 4b) Decide lateral (run scan ONLY if the geometry gate is active)
-    scan_triggered = False
-    scan_reason = None
-    sideways_action = None
-    scan_dbg = None
-
-    if lat_move_active:
+    # 4b) If persistence active, run the scan every frame
+    if _scan_persist_active:
         scan_triggered = True
-        scan_reason = "lat_move_active"
+        if scan_reason is None:
+            scan_reason = "persisted"
+
         sideways_action, scan_dbg = _scan_and_decide_move(
             lane_idx=lane_2,
             rays_for_lane=rays_for_lane,
@@ -1087,69 +963,30 @@ def run_top_logic_on_frame(
             out_img=out if do_overlays else None
         )
         _p(pfx, f"[scan] y={SCAN_Y} band=±{SCAN_BAND_PX} reason={scan_reason} -> action={sideways_action} dbg={scan_dbg}")
-    else:
-        _p(pfx, "[scan] skipped: LAT_Move gate OFF (dy≥thr)")
 
-    # 4c) Execute lateral if available; if we move laterally, we DO NOT jump
-    did_lateral = False
-    if sideways_action in ("MOVE_LEFT", "MOVE_RIGHT"):
-        on_ramp_now = SUPPRESS_LAT_ON_RAMP and _is_on_ramp_now(
-            lane_idx=lane_2,
-            rays_for_lane=rays_for_lane,
-            segments_by_ray=segments_by_ray,
-            scan_y=SCAN_Y,
-            band_px=SCAN_BAND_PX
-        )
-        if on_ramp_now:
-            _p(pfx, "[INPUT/lateral_TL] suppressed: ON RAMP at scanline")
-        else:
-            key = "left" if sideways_action == "MOVE_LEFT" else "right"
-            if _ltl_try_tap(key):
-                did_lateral = True
-                _p(pfx, f"[INPUT/lateral_TL] tapped {key}")
+        # --- EXECUTE MOVEMENT KEYS: lateral_TL only (namespaced cooldown) ---
+        if scan_triggered and sideways_action in ("MOVE_LEFT", "MOVE_RIGHT"):
+            on_ramp_now = SUPPRESS_LAT_ON_RAMP and _is_on_ramp_now(
+                lane_idx=lane_2,
+                rays_for_lane=rays_for_lane,
+                segments_by_ray=segments_by_ray,
+                scan_y=SCAN_Y,
+                band_px=SCAN_BAND_PX
+            )
+
+            if on_ramp_now:
+                _p(pfx, "[INPUT/lateral_TL] suppressed: ON RAMP at scanline")
+            elif lat_move_active:
+                key = "left" if sideways_action == "MOVE_LEFT" else "right"
+                if _ltl_try_tap(key):
+                    _p(pfx, f"[INPUT/lateral_TL] tapped {key}")
             else:
-                _p(pfx, "[INPUT/lateral_TL] tap blocked by cooldown")
+                _p(pfx, f"[INPUT/lateral_TL] suppressed: LAT_Move OFF (dy={dy_val}, thr={LAT_MOVE_Y_THRESH_PX})")
+
+
+
     else:
-        _p(pfx, "[INPUT/lateral_TL] no lateral candidate this frame")
-
-    # 4d) Jump ONLY if there is NO lateral possibility (i.e., no sideways_action)
-    #     and the probe sees rails above the yellow tip.
-    if (not did_lateral) and (sideways_action is None) and probe_hit and next_train_ok:
-
-        # ===================== MASSIVE NOTICE =====================
-        print(f"# Next after rails (primary={next_train_primary_ray}): {next_train_label} @ {int(round(next_train_dist)) if next_train_dist is not None else 'NA'} px (≤ {NEXT_TRAIN_MAX_PX}px)".ljust(91) + "#")
-        print("\n" + "#"*92)
-        print("# RAILS DETECTED ABOVE YELLOW TIP — JUMP (no lateral available) ".ljust(91) + "#")
-        print("# Order: lateral evaluated first → none; proceeding to jump ".ljust(91) + "#")
-        print(f"# Tip={target} | ProbeLen={YELLOW_PROBE_LEN} | Thick=±{YELLOW_PROBE_THICK}".ljust(91) + "#")
-        print("#"*92 + "\n")
-        # ==========================================================
-
-        nowm = time.monotonic()
-        can_jump = (nowm >= _JUMP_CD_UNTIL) and (nowm >= _TL_STICKY_UNTIL)
-        if can_jump and _HAS_PYAUTO:
-            try:
-                pyautogui.press(JUMP_KEY)
-                print(f"[INPUT/JUMP] ↑ pressed via pyautogui ({JUMP_KEY})")
-                _JUMP_CD_UNTIL = nowm + 0.45  # cooldown (tune as needed)
-            except Exception as e:
-                print(f"[INPUT/JUMP] pyautogui.press('{JUMP_KEY}') failed: {e}")
-        else:
-            why = []
-            if nowm < _JUMP_CD_UNTIL:   why.append("jump cooldown")
-            if nowm < _TL_STICKY_UNTIL: why.append("lateral sticky window")
-            print(f"[INPUT/JUMP] skipped (reason: {', '.join(why) or 'unknown'})")
-    else:
-        if did_lateral:
-            _p(pfx, "[arb] lateral executed → skip jump")
-        elif sideways_action is not None:
-            _p(pfx, "[arb] lateral candidate exists (but not executed) → skip jump")
-        elif probe_hit and not next_train_ok:
-            why = "no next mask" if next_train_label is None else f"{next_train_label} @ {int(round(next_train_dist)) if next_train_dist is not None else 'NA'}px (>{NEXT_TRAIN_MAX_PX}px or not TRAIN)"
-            _p(pfx, f"[arb] after-rails gate failed → {why} → skip jump")
-        else:
-            _p(pfx, "[arb] no rails probe hit or no target → skip jump")
-
+        _p(pfx, "[scan] not triggered")
 
     # (optional) augment the badge
     if do_overlays:
@@ -1181,7 +1018,5 @@ def run_top_logic_on_frame(
         "scan_y": SCAN_Y,
         "scan_band_px": SCAN_BAND_PX,
         "lat_move_active": lat_move_active,
-        "next_after_rails": next_after_rails,
-
     }
 

@@ -2546,7 +2546,7 @@ active_replay = False
 times_collection = []
 
 # === Selective save (save every frame when certain classes are present) ===
-SELECTIVE_SAVE_ENABLED = False
+SELECTIVE_SAVE_ENABLED = True
 WATCH_SAVE_CLASSES = {10, 7}  # tweak as you like
 
 
@@ -2719,7 +2719,7 @@ while running:
 
 
         # --- Selective save (level-triggered; save every frame while watched classes are present) ---
-        save_selective = False
+        save_selective = True
         sel_ids = []
         if SELECTIVE_SAVE_ENABLED:
             save_selective, sel_ids = _selective_hit_from_classes(classes_np, WATCH_SAVE_CLASSES)
