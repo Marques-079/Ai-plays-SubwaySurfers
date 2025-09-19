@@ -1267,8 +1267,8 @@ def _detect_lane_by_whiteness(img_bgr):
 try:
     last_action_ts
 except NameError:
-    last_action_ts = 0.0
-ACTION_COOLDOWN_S = 0.0
+    last_action_ts = 0.31
+ACTION_COOLDOWN_S = 0.31
 
 # distance threshold (pixels) from Jake to triangle apex for action decisions
 ACTION_DIST_PX = 30
@@ -2928,7 +2928,7 @@ while running:
         times_collection.append(total_elapsed_ms)
 
     else:
-        if DONT_MOVE < 4:
+        if DONT_MOVE < 2:
             print('GUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDEDGUARDED')
             DONT_MOVE +=1
             continue

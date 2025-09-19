@@ -21,7 +21,7 @@ NEXT_TRAIN_MAX_PX = 500
 
 # --- suppress lateral scanning for a while after a tap ---
 _LTL_SCAN_DISABLED_UNTIL = 0.0
-LTL_SCAN_COOLDOWN_S = 1.5  # ← set your XXX seconds here
+LTL_SCAN_COOLDOWN_S = 0.5  # ← set your XXX seconds here
 
 
 # --- movement output (pyautogui) for lateral_TL only ---
@@ -46,7 +46,7 @@ def _ltl_try_tap(key: str) -> bool:
         return False
     pyautogui.press(key)
 
-    time.sleep(0.3)
+    time.sleep(0.25)
 
     _LTL_LAST_TAP_TS = now
     # start the TOP stickiness window
@@ -114,7 +114,7 @@ YELLOW_PROBE_THICK = 2      # half-width (x) around the tip for probe hit test
 _scan_persist_active = False
 
 # Lateral move activation gate
-LAT_MOVE_Y_THRESH_PX = 500  # active when arrow length (dy) < this
+LAT_MOVE_Y_THRESH_PX = 300  # active when arrow length (dy) < this
 lat_move_active = False
 
 
