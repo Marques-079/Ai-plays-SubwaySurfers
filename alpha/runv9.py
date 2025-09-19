@@ -252,7 +252,7 @@ PILLAR_SCAN = {
     "start_frame": -1,         # for logs
     "cooldown_until": 0.0,     # monotonic ts; ignore re-triggers during cooldown
 }
-PILLAR_SCAN_COOLDOWN_S = 0.60  # ignore new scans for this long after a double move
+PILLAR_SCAN_COOLDOWN_S = 0.50  # ignore new scans for this long after a double move
 
 
 
@@ -373,6 +373,40 @@ def unit_from_theta(theta_deg: float):
     r = math.radians(t)
     return (math.sin(r), -math.cos(r))
 
+# --- Ramp lock: suppress lateral moves while Jake's probe sees a ramp ahead in same lane
+RAMP_LOCK = {"active": False, "lane": None}
+
+def _lane_from_x(x: int) -> int:
+    x0, x1, x2 = LANE_LEFT[0], LANE_MID[0], LANE_RIGHT[0]
+    d0 = abs(x - x0); d1 = abs(x - x1); d2 = abs(x - x2)
+    return 0 if d0 <= d1 and d0 <= d2 else (1 if d1 <= d2 else 2)
+
+def _update_ramp_lock_from_jake(jake_tri, jake_band_y: int):
+    """
+    Enter lock iff Jake's own triangle ray hits a RAMP (ID_RAMP) that is ahead in
+    the same lane. Release when ON_TOP flips true or the condition no longer holds.
+    """
+    global RAMP_LOCK, lane, ON_TOP, ID_RAMP
+
+    # Safe reads (hit_class may be None)
+    cid = jake_tri.get("hit_class") if jake_tri else None
+    pos = jake_tri.get("pos")       if jake_tri else None
+
+    # Short-circuit order avoids extra work when not needed
+    want_lock = (
+        (cid == ID_RAMP) and                         # no int() → handles None
+        (pos is not None) and
+        ((jake_band_y - int(pos[1])) > 0) and        # ahead of Jake
+        (_lane_from_x(int(pos[0])) == lane)          # same lane
+    )
+
+    if RAMP_LOCK["active"]:
+        if ON_TOP or not want_lock or RAMP_LOCK.get("lane") != lane:
+            RAMP_LOCK.update(active=False, lane=None)
+    else:
+        if want_lock:
+            RAMP_LOCK.update(active=True, lane=lane)
+
 
 def _lane_red_straight_ahead(JAKE_POINT, masks_np, classes_np, H, W) -> bool:
     """
@@ -479,6 +513,17 @@ def pillar_evasion_check_and_act(H: int, W: int,
     targets_ok   = allowed_only and (pillar_cnt >= 1)
     now_mono     = time.monotonic()
 
+
+    if now_mono < PILLAR_SCAN.get("cooldown_until", 0.0):
+        return False
+    # If we become eligible while red is already ahead and scan isn't armed, fire immediately
+    if targets_ok and in_side_lane and move_ok and red_now and not PILLAR_SCAN["active"]:
+        print("[PILLAR] red already ahead on entry → DOUBLE SIDESTEP")
+        acted = _double_sidestep()
+        PILLAR_SCAN.update(active=False, last_red=None, start_frame=-1,
+                        cooldown_until=now_mono + PILLAR_SCAN_COOLDOWN_S)
+        return bool(acted)
+
     dlog("PILLAR_GUARDS",
          only_targets=allowed_only,
          pillar_cnt=pillar_cnt,
@@ -533,12 +578,12 @@ def pillar_evasion_check_and_act(H: int, W: int,
     PILLAR_SCAN["last_red"] = True
     return False
 
-def _double_sidestep() -> bool:
+def _double_sidestep(from_pillar: bool = True) -> bool:
     """
     Emergency dodge: two taps to the opposite side lane, ignoring mid-lane logic.
     Returns True if keys were sent.
     """
-    global lane, last_move_ts, _synth_block_until
+    global lane, last_move_ts, _synth_block_until, REENTRY_BAN
 
     if not MOVEMENT_ENABLED:
         return False
@@ -546,44 +591,36 @@ def _double_sidestep() -> bool:
     prev_lane = lane
     now = time.perf_counter()
 
-    # Keep vision steady and swallow synthetic key echos
+    # keep vision steady and swallow synthetic key echos
     pause_inference(0.30)
     _synth_block_until = time.monotonic() + SYNTHETIC_SUPPRESS_S
 
-    # Small gap so the game registers two taps reliably
-    def _tap(k): 
+    def _tap(k):
         try: pyautogui.press(k)
-        except Exception: pass
+        except Exception: 
+            pass
         time.sleep(0.045)
 
     if lane == 0:
-        _tap('right'); _tap('right')
-        lane = 2
+        _tap('right'); _tap('right'); lane = 2
         print("[PILLAR EVADE] RIGHT, RIGHT → lane=2")
-
     elif lane == 2:
-        _tap('left'); _tap('left')
-        lane = 0
+        _tap('left'); _tap('left'); lane = 0
         print("[PILLAR EVADE] LEFT, LEFT → lane=0")
-
     else:
-        # Mid should not happen under our guard, but be defensive.
-        _tap('right'); _tap('right')
-        lane = 2
+        _tap('right'); _tap('right'); lane = 2
         print("[PILLAR EVADE] MID → RIGHT, RIGHT → lane=2")
 
     last_move_ts = now
 
-    # Optional: apply your re-entry ban if it exists
-    try:
+    if from_pillar:
+        # ensure any existing re-entry ban can’t block the immediate follow-up
+        REENTRY_BAN.update(lane=None, counter=0, last_intent_dir=None,
+                           last_intent_frame=None, expiry_frame=None)
+    else:
         _register_red_evasion_ban(prev_lane)
-    except NameError:
-        pass
 
     return True
-
-
-
 
 #======================================================================================================================================================================================
 
@@ -837,7 +874,7 @@ LUT_BASE_S = np.array(
      0.4185, 0.4885, 0.5701, 0.6654, 0.7765, 0.9063, 1.0578, 1.2345, 1.4408,
      1.6815, 1.9625], dtype=float)
 
-SHORTEN_S = 0.46
+SHORTEN_S = 0.40
 MIN_DELAY_S = 0.03
 MAX_DELAY_S = 2.00
 
@@ -845,7 +882,6 @@ def _compute_lut(shorten: float) -> np.ndarray:
     return np.clip(LUT_BASE_S - float(shorten), MIN_DELAY_S, MAX_DELAY_S)
 
 LUT_S = _compute_lut(SHORTEN_S)
-
 
 def first_mask_hit_starburst_then_ray_for_set(
     jake_point, tri_pos, theta_deg, masks_np, classes_np, H, W,
@@ -1335,6 +1371,7 @@ def first_hit_y(pos, masks_np, classes_np, H, W, class_set, band_px=6, step_px=5
     return None
 
 
+
 # Only step from RED into a YELLOW lane if its triangle is far enough ahead
 MIN_YELLOW_AHEAD_PX = 400
 def _filter_yellow_far(cands, jake_band_y: int, min_ahead_px: int = MIN_YELLOW_AHEAD_PX):
@@ -1485,7 +1522,30 @@ def on_press(key):
     except Exception as e:
         print(f"Error: {e}")
 
+def _is_jake_on_sidewalk(jake_point, masks_np, classes_np, H, W) -> bool:
+    """
+    True iff the SIDEWALK mask covers the EXACT screen pixel under Jake.
+    Uses already-computed masks/classes. O(1).
+    """
+    if masks_np is None or classes_np is None or masks_np.size == 0:
+        return False
 
+    idxs = np.where(classes_np.astype(int) == SIDEWALK_ID)[0]
+    if idxs.size == 0:
+        return False
+
+    mh, mw = masks_np.shape[1], masks_np.shape[2]
+    sx = (mw - 1) / max(1, (W - 1))
+    sy = (mh - 1) / max(1, (H - 1))
+
+    x, y = int(jake_point[0]), int(jake_point[1])
+    mx = _clampi(int(round(x * sx)), 0, mw - 1)
+    my = _clampi(int(round(y * sy)), 0, mh - 1)
+
+    for i in idxs:
+        if masks_np[i][my, mx] > 0.5:
+            return True
+    return False
 
 # =======================
 # System/Backends
@@ -2257,6 +2317,9 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
         jx, jy = jake_tri["pos"]
         jake_hit = jake_tri["hit_class"]
 
+        jake_band_y = jake_point[1]
+        _update_ramp_lock_from_jake(jake_tri, jake_band_y)
+
         # For movement logging: distance to the obstacle ahead of Jake
         __p_redband = __PROF('post.jake.first_red_hit_y')
         y_hit_log = first_red_hit_y(jake_tri["pos"], masks_np, classes_np, H, W, band_px=6, step_px=5)
@@ -2366,6 +2429,9 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
         if jake_hit is None:
             pass
 
+        elif RAMP_LOCK["active"]:
+            print("[MOVE] suppressed: ramp lock active (wait for ON_TOP)")
+
         # RED ahead: GREEN -> (far) YELLOW -> least-bad RED (all-red fallback)
         elif _is_danger(jake_hit):
             # 1) HYPERGREEN first (jump lanes)
@@ -2381,6 +2447,8 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                 prev_lane = lane
                 _issue_move_towards_x(jx, tgt["pos"][0], sidewalk_present=sidewalk_present)
 
+                if tgt is not None and int(tgt.get("hit_class", -1)) in HYPERGREEN_CLASSES and lane != prev_lane:
+                    time.sleep(0.6)    
                 # if int(tgt.get("hit_class", -1)) == ID_RAMP:   # 8
                 #     pause_inference(1.5)  # or: time.sleep(2.0)
 
@@ -2431,8 +2499,11 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                     # else: boxed in → no lateral move this frame
 
         # YELLOW ahead: try GREEN; if none, rely on countermeasures (jump/duck)
+        # YELLOW ahead: try GREEN; if none, rely on countermeasures (jump/duck)
         elif _is_warn(jake_hit):
-            tgt = (_nearest_ramp_by_y(hypergreens_far, jake_band_y) or _nearest_x(hypergreens_far) or _nearest_x(greens_far))
+            tgt = (_nearest_ramp_by_y(hypergreens_far, jake_band_y)
+                or _nearest_x(hypergreens_far)
+                or _nearest_x(greens_far))
             if tgt is not None:
                 # Only pre-arm if this chosen target is the hypergreen jump (class 3)
                 cls = tgt.get("hit_class")
@@ -2440,10 +2511,13 @@ def process_frame_post(frame_bgr, yolo_res, jake_point):
                     _prearm_jump_for_triangle(tgt, tgt["idx"], jake_point, tri_rays,
                                             masks_np, classes_np, H, W)
 
+                prev_lane = lane                         # ← add this
                 _issue_move_towards_x(jx, tgt["pos"][0], sidewalk_present=sidewalk_present)
 
-                # if int(tgt.get("hit_class", -1)) == ID_RAMP:   # 8
-                #     pause_inference(1.5)  # or: time.sleep(2.0)
+                # sleep only if we actually moved and the target is hypergreen (3 or 8)
+                if int(tgt.get("hit_class", -1)) in HYPERGREEN_CLASSES and lane != prev_lane:
+                    time.sleep(0.6)  # or pause_inference(1.5)
+
 
 
 
@@ -2871,6 +2945,14 @@ while running:
             times_collection.append((time.perf_counter() - frame_start_time) * 1000.0)
             continue
         # =====================================================================
+        if _is_jake_on_sidewalk(JAKE_POINT, masks_np, classes_np, H, W):
+            print("[SIDEWALK] Standing on sidewalk → freeze movement & skip frame")
+            _cancel_impact_timer("on sidewalk")          # optional: avoids stale jump/duck
+            # (Optionally also block synthetic key echoes)
+            _synth_block_until = time.monotonic() + SYNTHETIC_SUPPRESS_S
+            # Skip the rest of the logic; next frame will re-check
+            times_collection.append((time.perf_counter() - frame_start_time) * 1000.0)
+            continue
 
         sidewalk_present = (
         classes_np is not None and classes_np.size > 0 and

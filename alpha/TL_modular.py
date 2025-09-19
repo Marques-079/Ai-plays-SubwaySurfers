@@ -114,7 +114,7 @@ YELLOW_PROBE_THICK = 2      # half-width (x) around the tip for probe hit test
 _scan_persist_active = False
 
 # Lateral move activation gate
-LAT_MOVE_Y_THRESH_PX = 300  # active when arrow length (dy) < this
+LAT_MOVE_Y_THRESH_PX = 450  # active when arrow length (dy) < this
 lat_move_active = False
 
 
