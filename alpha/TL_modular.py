@@ -103,7 +103,7 @@ RAMP_CLASS_ID = 8
 
 # --- yellow-arrow → scanline decisioning (NEW) ---
 SCAN_Y             = 1450   # scan band center
-SCAN_BAND_PX       = 6      # ± vertical tolerance for y-band
+SCAN_BAND_PX       = 6     # ± vertical tolerance for y-band. -> EXPERIEMENT ING. NOW 
 SCAN_PERSIST       = True   # once triggered, keep scanning every frame
 
 # probe thrown vertically from the yellow arrow tip (target)

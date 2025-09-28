@@ -23,7 +23,9 @@ runv4.py : compute analysis, toggle frame saves
 runv5.py : shared ring memory, slight recallibration of parameters + auto shutdown and killswitch
 runv6.py : introducing inference and postproc optimisations
 runv7.py : Ground logic improved across the board, top logic scanners instated and dynamic prox for high speeds + more
-runv8.py
+runv8.py : QOL 
+runv9.py : Top logic fixed, pillar logic fixed, few discrepencies left 
+runv10.py : frame save funnel to flash drive -> collate dataset
 
 
 scgrab : swift compiled for shared memory ring + needs to be booted for shared memory 
@@ -527,3 +529,16 @@ Panic state
 Straight jumpings TL. 
 Timing logic for TLS approx on time 
 Diagonal TL jump + move combos 
+
+19/09/25'
+Setting up data pipeline
+What is the most efficient way of being able to label frames with movements when made. Two requirements: Some movements are made in the TL script which are untracable to this code where our logic for saving will lie We already have the screenshot extracted ib BGR form as a variable so that is what we'll wnat to write to the drive with the correspond movement label At 0.25 sec intervals no movement snapshots should be taken, so if no movement in last 0.5 seconds then we start just takening snapshots and labelling accordingly. Dont write code but lets think about how to set this up. We will also want to encode composties AND basic movements, so we will want to hand it the follow in labels (just so i have it rather thannot). (Key pressed, Composite (LMSE codes), current lane. Anything to add to this list? Articulate thoughts and return to me a full response on thpughts suggesttions etc
+
+
+28/09
+dropoff will clear all framesd from top dismount 
+death frame removals 
+faster inference >20ms 
+
+how to deal with multiple options
+VID trans means more data -> what do we actually need and no overhead while train runs 
