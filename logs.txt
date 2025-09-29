@@ -542,3 +542,9 @@ faster inference >20ms
 
 how to deal with multiple options
 VID trans means more data -> what do we actually need and no overhead while train runs 
+
+30/09
+
+Tunnel logic is broken 
+
+Everything else is primed for data funneling = collection 

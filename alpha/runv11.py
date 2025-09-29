@@ -1,6 +1,11 @@
 import subprocess, sys; ANN_PROC = subprocess.Popen([sys.executable, "/Users/marcus/Documents/GitHub/Ai-plays-SubwaySurfers/alpha/announcer.py"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 import os, sys, argparse, builtins, warnings
 
+import subprocess, sys
+BASE = "/Users/marcus/Documents/GitHub/Ai-plays-SubwaySurfers/alpha/arrow_save_to_transcend.py"
+proc = subprocess.Popen([sys.executable, BASE, "start"])
+
+
 
 _mute_parser = argparse.ArgumentParser(add_help=False)
 _mute_parser.add_argument("--quiet",  action="store_true",
@@ -3042,9 +3047,16 @@ while running:
         elapsed_TL = time.perf_counter() - started_1
         print(f"Time taken for logic TL is {elapsed_TL * 1000:.2f} ms")
         continue
-
+    
+subprocess.run([sys.executable, BASE, "shutdown"], check=False)
 # Cleanup
-listener.join()
+
+try:
+    listener.stop()                    # tell it to exit
+    listener.join(timeout=0.5)         # never wait forever
+except Exception:
+    pass
+
 try: ANN_PROC.terminate()
 except Exception: pass
 pyautogui.press('esc')

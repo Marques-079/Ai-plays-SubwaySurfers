@@ -6,6 +6,13 @@
 from __future__ import annotations
 import cv2, numpy as np, math, time, os
 from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any  # ← add Any
+
+_TL_EVENT_LOG: List[Dict[str, Any]] = []
+
+def _tl_log(kind: str, **kw) -> None:
+    """Record TL decisions and inputs (timers, keypresses, moves) with a timestamp."""
+    _TL_EVENT_LOG.append({"ts": time.monotonic(), "kind": kind, **kw})
 
 # ===================== MASTER FEATURE GUARD =====================
 # When False: disable ALL overlays (drawing) and disk writes.
@@ -40,23 +47,34 @@ _LTL_TAP_COOLDOWN_S = 0.330  # seconds
 def _ltl_try_tap(key: str) -> bool:
     global _LTL_LAST_TAP_TS, _TL_STICKY_UNTIL, _LTL_SCAN_DISABLED_UNTIL
     if not _HAS_PYAUTO:
+        _tl_log("keypress_attempt", key=key, executed=False, source="lateral_TL", reason="no_pyautogui")
         return False
+
     now = time.perf_counter()
-    if now - _LTL_LAST_TAP_TS < _LTL_TAP_COOLDOWN_S:
+    since = now - _LTL_LAST_TAP_TS
+    if since < _LTL_TAP_COOLDOWN_S:
+        _tl_log("keypress_attempt", key=key, executed=False, source="lateral_TL",
+                reason="tap_cooldown", cooldown_remaining_s=_LTL_TAP_COOLDOWN_S - since)
         return False
+
+    # send the tap
     pyautogui.press(key)
+    _tl_log("keypress", key=key, executed=True, source="lateral_TL")
 
     time.sleep(0.25)
 
     _LTL_LAST_TAP_TS = now
-    # start the TOP stickiness window
-    import time as _t
-    nowm = _t.monotonic()
+    # start the TOP stickiness window + suppress lateral scanning briefly
+    nowm = time.monotonic()
     _TL_STICKY_UNTIL = nowm + STICKY_AFTER_LATERAL_S
-    _LTL_SCAN_DISABLED_UNTIL = nowm + LTL_SCAN_COOLDOWN_S   # ← NEW: block lateral scan for XXXs
+    _tl_log("timer_set", name="TL_STICKY_UNTIL", until=_TL_STICKY_UNTIL,
+            duration_s=STICKY_AFTER_LATERAL_S, reason="after_lateral_tap")
+
+    _LTL_SCAN_DISABLED_UNTIL = nowm + LTL_SCAN_COOLDOWN_S
+    _tl_log("timer_set", name="LTL_SCAN_DISABLED_UNTIL", until=_LTL_SCAN_DISABLED_UNTIL,
+            duration_s=LTL_SCAN_COOLDOWN_S, reason="after_lateral_tap")
+
     return True
-
-
 
 # --- Hold state while carrying out lateral movementsp ---
 _TL_STICKY_UNTIL = 0.0          # monotonic seconds
@@ -773,6 +791,12 @@ def run_top_logic_on_frame(
     t_total = time.perf_counter()
     H, W = frame_bgr_2.shape[:2]
 
+    # --- per-frame logging reset & lane snapshot ---
+    lane_from = int(lane_2)
+    lane_to   = int(lane_2)
+    _TL_EVENT_LOG.clear()
+
+
     lat_move_active = False 
 
     # ---- LANE-DOT RGBA GATE (fast skip if not present) ----
@@ -1118,12 +1142,16 @@ def run_top_logic_on_frame(
         if on_ramp_now:
             _p(pfx, "[INPUT/lateral_TL] suppressed: ON RAMP at scanline")
         else:
-            key = "left" if sideways_action == "MOVE_LEFT" else "right"
-            if _ltl_try_tap(key):
-                did_lateral = True
-                _p(pfx, f"[INPUT/lateral_TL] tapped {key}")
-            else:
-                _p(pfx, "[INPUT/lateral_TL] tap blocked by cooldown")
+                    key = "left" if sideways_action == "MOVE_LEFT" else "right"
+                    if _ltl_try_tap(key):
+                        did_lateral = True
+                        # figure out where we ended up
+                        delta = -1 if key == "left" else +1
+                        lane_to = _clampi(lane_from + delta, 0, 2)
+                        _tl_log("lateral_move", direction=key, lane_from=lane_from, lane_to=lane_to)
+                        _p(pfx, f"[INPUT/lateral_TL] tapped {key}")
+                    else:
+                        _p(pfx, "[INPUT/lateral_TL] tap blocked by cooldown")
     else:
         _p(pfx, "[INPUT/lateral_TL] no lateral candidate this frame")
 
@@ -1145,19 +1173,23 @@ def run_top_logic_on_frame(
         if can_jump and _HAS_PYAUTO:
             try:
                 pyautogui.press(JUMP_KEY)
-                print(f"[INPUT/JUMP] ↑ pressed via pyautogui ({JUMP_KEY})")
-                _JUMP_CD_UNTIL = nowm + 0.45  # cooldown (tune as needed)
+                _tl_log("keypress", key=JUMP_KEY, executed=True, source="jump")
 
+                print(f"[INPUT/JUMP] ↑ pressed via pyautogui ({JUMP_KEY})")
+                _JUMP_CD_UNTIL = nowm + 0.45
+                _tl_log("timer_set", name="JUMP_CD_UNTIL", until=_JUMP_CD_UNTIL,
+                        duration_s=0.45, reason="after_jump")
 
                 time.sleep(0.79)
 
-
             except Exception as e:
+                _tl_log("keypress", key=JUMP_KEY, executed=False, source="jump", error=str(e))
                 print(f"[INPUT/JUMP] pyautogui.press('{JUMP_KEY}') failed: {e}")
         else:
             why = []
             if nowm < _JUMP_CD_UNTIL:   why.append("jump cooldown")
             if nowm < _TL_STICKY_UNTIL: why.append("lateral sticky window")
+            _tl_log("keypress_attempt", key=JUMP_KEY, executed=False, source="jump", reason=", ".join(why) or "unknown")
             print(f"[INPUT/JUMP] skipped (reason: {', '.join(why) or 'unknown'})")
     else:
         if did_lateral:
@@ -1188,6 +1220,9 @@ def run_top_logic_on_frame(
     _pmaybe(pfx, "TOTAL", _ms(t_total))
     _mem(pfx)
 
+    did_jump = any(e.get("kind") == "keypress" and e.get("executed") and e.get("key") == JUMP_KEY
+                   for e in _TL_EVENT_LOG)
+
     return {
         "out_img": out,
         "target": target,
@@ -1195,7 +1230,6 @@ def run_top_logic_on_frame(
         "source_note": source_note,
         "purple_tris": purple_tris,
         "segments_by_ray": segments_by_ray,
-        # NEW:
         "scan_triggered": scan_triggered,
         "sideways_action": sideways_action,
         "scan_y": SCAN_Y,
@@ -1203,5 +1237,13 @@ def run_top_logic_on_frame(
         "lat_move_active": lat_move_active,
         "next_after_rails": next_after_rails,
 
+        # --- NEW: per-frame action summary ---
+        "lane_from": lane_from,
+        "lane_to": lane_to,
+        "did_lateral": did_lateral,
+        "did_jump": did_jump,
+        "keys_pressed": [e["key"] for e in _TL_EVENT_LOG if e["kind"] == "keypress" and e.get("executed")],
+        "events": list(_TL_EVENT_LOG),  # full structured trace
     }
+
 

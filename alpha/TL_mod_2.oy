@@ -19,6 +19,10 @@ JUMP_KEY = "up"               # centralize jump key name
 # Jump gate: only allow jump if a TRAIN appears after rails within this many pixels
 NEXT_TRAIN_MAX_PX = 500
 
+# --- suppress lateral scanning for a while after a tap ---
+_LTL_SCAN_DISABLED_UNTIL = 0.0
+LTL_SCAN_COOLDOWN_S = 0.5  # ← set your XXX seconds here
+
 
 # --- movement output (pyautogui) for lateral_TL only ---
 try:
@@ -34,7 +38,7 @@ _LTL_LAST_TAP_TS = 0.0
 _LTL_TAP_COOLDOWN_S = 0.330  # seconds
 
 def _ltl_try_tap(key: str) -> bool:
-    global _LTL_LAST_TAP_TS, _TL_STICKY_UNTIL
+    global _LTL_LAST_TAP_TS, _TL_STICKY_UNTIL, _LTL_SCAN_DISABLED_UNTIL
     if not _HAS_PYAUTO:
         return False
     now = time.perf_counter()
@@ -42,13 +46,16 @@ def _ltl_try_tap(key: str) -> bool:
         return False
     pyautogui.press(key)
 
-    time.sleep(0.3)
+    time.sleep(0.25)
 
     _LTL_LAST_TAP_TS = now
     # start the TOP stickiness window
     import time as _t
-    _TL_STICKY_UNTIL = _t.monotonic() + STICKY_AFTER_LATERAL_S
+    nowm = _t.monotonic()
+    _TL_STICKY_UNTIL = nowm + STICKY_AFTER_LATERAL_S
+    _LTL_SCAN_DISABLED_UNTIL = nowm + LTL_SCAN_COOLDOWN_S   # ← NEW: block lateral scan for XXXs
     return True
+
 
 
 # --- Hold state while carrying out lateral movementsp ---
@@ -96,7 +103,7 @@ RAMP_CLASS_ID = 8
 
 # --- yellow-arrow → scanline decisioning (NEW) ---
 SCAN_Y             = 1450   # scan band center
-SCAN_BAND_PX       = 6      # ± vertical tolerance for y-band
+SCAN_BAND_PX       = 6     # ± vertical tolerance for y-band. -> EXPERIEMENT ING. NOW 
 SCAN_PERSIST       = True   # once triggered, keep scanning every frame
 
 # probe thrown vertically from the yellow arrow tip (target)
@@ -107,7 +114,7 @@ YELLOW_PROBE_THICK = 2      # half-width (x) around the tip for probe hit test
 _scan_persist_active = False
 
 # Lateral move activation gate
-LAT_MOVE_Y_THRESH_PX = 500  # active when arrow length (dy) < this
+LAT_MOVE_Y_THRESH_PX = 450  # active when arrow length (dy) < this
 lat_move_active = False
 
 
@@ -1072,13 +1079,20 @@ def run_top_logic_on_frame(
 
 
 
-    # 4b) Decide lateral (run scan ONLY if the geometry gate is active)
+    # 4b) Decide lateral (run scan ONLY if the geometry gate is active and not in cooldown)
     scan_triggered = False
     scan_reason = None
     sideways_action = None
     scan_dbg = None
 
-    if lat_move_active:
+    nowm_scan = time.monotonic()
+    scan_cooldown_active = nowm_scan < _LTL_SCAN_DISABLED_UNTIL
+
+    if not lat_move_active:
+        _p(pfx, "[scan] skipped: LAT_Move gate OFF (dy≥thr)")
+    elif scan_cooldown_active:
+        _p(pfx, f"[scan] suppressed: lateral-scan cooldown {(_LTL_SCAN_DISABLED_UNTIL - nowm_scan):.2f}s remaining")
+    else:
         scan_triggered = True
         scan_reason = "lat_move_active"
         sideways_action, scan_dbg = _scan_and_decide_move(
@@ -1090,8 +1104,6 @@ def run_top_logic_on_frame(
             out_img=out if do_overlays else None
         )
         _p(pfx, f"[scan] y={SCAN_Y} band=±{SCAN_BAND_PX} reason={scan_reason} -> action={sideways_action} dbg={scan_dbg}")
-    else:
-        _p(pfx, "[scan] skipped: LAT_Move gate OFF (dy≥thr)")
 
     # 4c) Execute lateral if available; if we move laterally, we DO NOT jump
     did_lateral = False
