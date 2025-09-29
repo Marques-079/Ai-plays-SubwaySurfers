@@ -26,6 +26,7 @@ runv7.py : Ground logic improved across the board, top logic scanners instated a
 runv8.py : QOL 
 runv9.py : Top logic fixed, pillar logic fixed, few discrepencies left 
 runv10.py : frame save funnel to flash drive -> collate dataset
+runv11.py : afk for frame stacking, few bugs in logic (tunneling) left to fix
 
 
 scgrab : swift compiled for shared memory ring + needs to be booted for shared memory 
@@ -546,5 +547,6 @@ VID trans means more data -> what do we actually need and no overhead while trai
 30/09
 
 Tunnel logic is broken 
+hypergreen ramps logic 
 
 Everything else is primed for data funneling = collection 

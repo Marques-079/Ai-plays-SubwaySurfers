@@ -1,11 +1,14 @@
-import subprocess, sys; ANN_PROC = subprocess.Popen([sys.executable, "/Users/marcus/Documents/GitHub/Ai-plays-SubwaySurfers/alpha/announcer.py"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-import os, sys, argparse, builtins, warnings
+DO_WE_WANT_CALLOUTS = False #Audio queues on moves 
 
-import subprocess, sys
+if DO_WE_WANT_CALLOUTS:
+    import subprocess, sys; ANN_PROC = subprocess.Popen([sys.executable, "/Users/marcus/Documents/GitHub/Ai-plays-SubwaySurfers/alpha/announcer.py"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+import os, sys, argparse, builtins, warnings, subprocess, time
 BASE = "/Users/marcus/Documents/GitHub/Ai-plays-SubwaySurfers/alpha/arrow_save_to_transcend.py"
 proc = subprocess.Popen([sys.executable, BASE, "start"])
 
-
+import subprocess, shlex; scgrab_proc = subprocess.Popen(shlex.split("./scgrab --x 644 --y 77 --w 505 --h 906 --fps 60 --out /tmp/scap.ring --slots 3 --scale 2"), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+time.sleep(1.0)  # let it settle
 
 _mute_parser = argparse.ArgumentParser(add_help=False)
 _mute_parser.add_argument("--quiet",  action="store_true",
@@ -609,12 +612,15 @@ def _double_sidestep(from_pillar: bool = True) -> bool:
     if lane == 0:
         _tap('right'); _tap('right'); lane = 2
         print("[PILLAR EVADE] RIGHT, RIGHT → lane=2")
+        time.sleep(0.1)
     elif lane == 2:
         _tap('left'); _tap('left'); lane = 0
         print("[PILLAR EVADE] LEFT, LEFT → lane=0")
+        time.sleep(0.1)
     else:
         _tap('right'); _tap('right'); lane = 2
         print("[PILLAR EVADE] MID → RIGHT, RIGHT → lane=2")
+        time.sleep(0.1)
 
     last_move_ts = now
 
@@ -3049,6 +3055,12 @@ while running:
         continue
     
 subprocess.run([sys.executable, BASE, "shutdown"], check=False)
+
+try: scgrab_proc.terminate(); scgrab_proc.wait(timeout=2)
+except Exception: 
+    try: scgrab_proc.kill()
+    except Exception: pass
+
 # Cleanup
 
 try:
