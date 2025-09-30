@@ -1,14 +1,18 @@
-DO_WE_WANT_CALLOUTS = False #Audio queues on moves 
+import atexit, subprocess
+atexit.register(lambda: subprocess.run("killall scgrab 2>/dev/null || true", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+
+
+DO_WE_WANT_CALLOUTS = True #Audio queues on moves 
 
 if DO_WE_WANT_CALLOUTS:
     import subprocess, sys; ANN_PROC = subprocess.Popen([sys.executable, "/Users/marcus/Documents/GitHub/Ai-plays-SubwaySurfers/alpha/announcer.py"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+import subprocess, shlex; scgrab_proc = subprocess.Popen(shlex.split("./scgrab --x 644 --y 77 --w 505 --h 906 --fps 60 --out /tmp/scap.ring --slots 3 --scale 2"), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
 import os, sys, argparse, builtins, warnings, subprocess, time
 BASE = "/Users/marcus/Documents/GitHub/Ai-plays-SubwaySurfers/alpha/arrow_save_to_transcend.py"
 proc = subprocess.Popen([sys.executable, BASE, "start"])
 
-import subprocess, shlex; scgrab_proc = subprocess.Popen(shlex.split("./scgrab --x 644 --y 77 --w 505 --h 906 --fps 60 --out /tmp/scap.ring --slots 3 --scale 2"), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-time.sleep(1.0)  # let it settle
 
 _mute_parser = argparse.ArgumentParser(add_help=False)
 _mute_parser.add_argument("--quiet",  action="store_true",
@@ -51,7 +55,6 @@ if QUIET_MODE:
         pass
 
 # Replace print itself (prevents function call overhead, but note: f-strings are
-# still evaluated at the call site — use dprint(lambda: ...) to avoid that).
 if SILENT_MODE:
     builtins.print = lambda *a, **k: None
 
@@ -67,7 +70,6 @@ def dprint(msg=None, *a, **k):
         return builtins.__dict__.get("print", lambda *aa, **kk: None)(msg, *a, **k)
 # ============================================================================
 
-# (Your regular imports and full argparse come after this block)
 
 
 import os, time, math, subprocess
@@ -198,7 +200,7 @@ def _as_u8_view(a: np.ndarray) -> np.ndarray:
     if a.dtype == np.bool_:
         v = a.view(np.uint8)  # 0/1 bytes, no copy
     elif a.dtype == np.uint8:
-        v = a
+        v = a  
     else:
         v = a.astype(np.uint8, copy=False)  # already small; avoids extra copy if possible
     return v if v.flags["C_CONTIGUOUS"] else np.ascontiguousarray(v)
@@ -244,7 +246,7 @@ def __unmute_keys():
     print("[BOOT] movement unmuted")
 
 
-# Allow movement immediately; after 0.5s, mute; after 3.0s total, unmute
+# Allow movement immediately; after 0.5s, mute; after 6.0s total, unmute
 Timer(0.5, __mute_keys).start()
 Timer(6.0, __unmute_keys).start()
 
@@ -361,17 +363,6 @@ TRAIN_TOPS = {1, 6, 11}  # GREY/ORANGE/YELLOW trains
 PILLAR_ALLOWED = TRAIN_TOPS | {ID_RAILS, ID_PILLAR}          # trains + rails + pillar only
 
 
-def _only_trains_rails_pillars_present(classes_np: np.ndarray) -> bool:
-    """
-    True iff:
-      • at least one pillar is present, and
-      • ALL instances are in PILLAR_ALLOWED.
-    """
-    if classes_np is None or classes_np.size == 0:
-        return False
-    uniq = np.unique(classes_np.astype(int, copy=False))
-    return (ID_PILLAR in uniq) and np.all(np.isin(uniq, tuple(PILLAR_ALLOWED)))
-
 def unit_from_theta(theta_deg: float):
     """Return a unit (dx,dy) pointing 'theta_deg' from vertical, up = -y."""
     t = float(theta_deg)
@@ -415,14 +406,6 @@ def _update_ramp_lock_from_jake(jake_tri, jake_band_y: int):
         if want_lock:
             RAMP_LOCK.update(active=True, lane=lane)
 
-
-def _lane_red_straight_ahead(JAKE_POINT, masks_np, classes_np, H, W) -> bool:
-    """
-    Cheapest 'lane in front turned red' test: reuse your existing first_red_hit_y
-    with the Jake band anchor (no new masks, no resizes).
-    """
-    y_hit = first_red_hit_y(JAKE_POINT, masks_np, classes_np, H, W, band_px=6, step_px=5)
-    return (y_hit is not None)
 
 def _allowed_and_pillar_stats(classes_np):
     """
@@ -527,6 +510,7 @@ def pillar_evasion_check_and_act(H: int, W: int,
     # If we become eligible while red is already ahead and scan isn't armed, fire immediately
     if targets_ok and in_side_lane and move_ok and red_now and not PILLAR_SCAN["active"]:
         print("[PILLAR] red already ahead on entry → DOUBLE SIDESTEP")
+        time.sleep(0.3) 
         acted = _double_sidestep()
         PILLAR_SCAN.update(active=False, last_red=None, start_frame=-1,
                         cooldown_until=now_mono + PILLAR_SCAN_COOLDOWN_S)
@@ -3056,10 +3040,8 @@ while running:
     
 subprocess.run([sys.executable, BASE, "shutdown"], check=False)
 
-try: scgrab_proc.terminate(); scgrab_proc.wait(timeout=2)
-except Exception: 
-    try: scgrab_proc.kill()
-    except Exception: pass
+import atexit, subprocess
+atexit.register(lambda: subprocess.run("killall scgrab 2>/dev/null || true", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
 
 # Cleanup
 

@@ -30,7 +30,7 @@ IDLE_AUTOPRESS_S   = 30.0
 IDLE_AUTOPRESS_KEY = "right"
 
 # Short-run scrub: if total runtime (start -> end) is below this, delete ALL files from this run
-BAD_RUN_SCRUB_S    = 20.0
+BAD_RUN_SCRUB_S    = 25.0
 # ----------------------------------------------------
 
 STOP = threading.Event()
