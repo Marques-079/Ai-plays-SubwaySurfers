@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-# arrow_save_to_transcend.py — per-day folder, NM ticker, NM purge-on-press,
-# idle auto-press + purge, and "short-run scrub" (delete all files from this run if runtime < threshold)
+# arrow_save_to_transcend.py — start/shutdown service that saves a frame to Transcend on ANY arrow keypress.
 # Start:   python arrow_save_to_transcend.py start
 # Stop:    python arrow_save_to_transcend.py shutdown
 # Programmatic: from arrow_save_to_transcend import run; run(["start"]); run(["shutdown"])
@@ -8,39 +7,33 @@
 import os, time, json, signal, argparse, threading, queue, subprocess
 import cv2, numpy as np
 from pynput import keyboard
-from collections import deque
 from ring_grab import get_frame_bgr_from_ring  # returns (frame_bgr, meta)
-import itertools
-_SEQ = itertools.count()
+from collections import deque
 
-time.sleep(7.0)  # wait for boot processes
-
+time.sleep(7.0)
 # ------------ Config (tweak if needed) --------------
 RING_PATH   = "/tmp/scap.ring"
 VOL_NAME    = "transcend"
-ENC_PARAMS  = [cv2.IMWRITE_JPEG_QUALITY, 92]     # speed/size trade-off
-STATE_PATH  = "/tmp/arrow_saver_state.json"      # pid, dest_root, session, recent records
-PID_PATH    = "/tmp/arrow_saver.pid"             # running pid
-RECENT_KEEP = 1024                               # remember last N saved (bumped a bit)
+ENC_PARAMS  = [cv2.IMWRITE_JPEG_QUALITY, 92]  # speed/size trade-off
+STATE_PATH  = "/tmp/arrow_saver_state.json"   # pid, dest_root, recent paths/records
+PID_PATH    = "/tmp/arrow_saver.pid"          # running pid
+RECENT_KEEP = 256                              # remember last N saved
 
 # NM (no-move) capture settings
-NM_PERIOD_S = 1.5                                 # capture every NM_PERIOD_S when idle
-NM_DELETE_WINDOW_S = 0.5                          # if an NM was saved within this window before an arrow, delete that NM
+NM_PERIOD_S = 1.5                              # capture every NM_PERIOD_S when idle
+
+# If an NM frame was saved within this window before an arrow keypress, delete it
+NM_DELETE_WINDOW_S = 0.5
 
 # Idle auto-press: if no arrow pressed for this long, purge last window and press RIGHT once
 IDLE_AUTOPRESS_S   = 30.0
 IDLE_AUTOPRESS_KEY = "right"
-
-# Short-run scrub: if total runtime (start -> end) is below this, delete ALL files from this run
-BAD_RUN_SCRUB_S    = 25.0
 # ----------------------------------------------------
 
 STOP = threading.Event()
-Q = queue.Queue(maxsize=128)
+Q = queue.Queue(maxsize=64)
 
 # Monotonic clock bookkeeping
-START_WALL_NS = None          # set at start
-START_MONO_NS = None          # set at start
 LAST_PRESS_MONO_NS = time.monotonic_ns()
 NEXT_NM_DUE_MONO_NS = LAST_PRESS_MONO_NS + int(NM_PERIOD_S * 1e9)
 NEXT_IDLE_AUTOPRESS_DUE_MONO_NS = LAST_PRESS_MONO_NS + int(IDLE_AUTOPRESS_S * 1e9)
@@ -49,20 +42,8 @@ NEXT_IDLE_AUTOPRESS_DUE_MONO_NS = LAST_PRESS_MONO_NS + int(IDLE_AUTOPRESS_S * 1e
 REC_LOCK = threading.Lock()
 RECENT_LOCAL = deque(maxlen=RECENT_KEEP)
 
-# Per-run identifiers
-SESSION_ID = None
-DEST_ROOT = None  # Transcend root
-
-# ---------- Helpers ----------
-def _b36(n):
-    if n == 0: return "0"
-    a = "0123456789abcdefghijklmnopqrstuvwxyz"; s = []
-    while n:
-        n, r = divmod(n, 36); s.append(a[r])
-    return "".join(reversed(s))
-
-def _make_session_id():
-    return f"{_b36(time.time_ns())}-{os.getpid()}"
+# Transcend root (resolved on start)
+DEST_ROOT = None
 
 def _find_transcend(name="transcend"):
     for v in os.listdir("/Volumes"):
@@ -71,9 +52,11 @@ def _find_transcend(name="transcend"):
     raise SystemExit("Transcend drive not found under /Volumes")
 
 def _day_from_ns(t_ns):
+    # YYYYMMDD in local time from a nanosecond timestamp
     return time.strftime("%Y%m%d", time.localtime(t_ns / 1e9))
 
 def _dest_dir_for_ns(t_ns, root=None):
+    # Return (and create) the per-day folder for the given timestamp
     base = root or DEST_ROOT
     day  = _day_from_ns(t_ns)
     dest = os.path.join(base, f"arrow_frames_{day}")
@@ -83,7 +66,7 @@ def _dest_dir_for_ns(t_ns, root=None):
 def _prepare_dest_root():
     root = _find_transcend(VOL_NAME)
     subprocess.run(["mdutil", "-i", "off", root], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    # Ensure today's folder exists at startup (we still choose per-save by t_ns)
+    # Ensure today's folder exists at startup (we still choose per-save by timestamp)
     _dest_dir_for_ns(time.time_ns(), root)
     return root
 
@@ -93,11 +76,18 @@ def _fast_write(path, data):
         fd = f.fileno()
         try:
             import fcntl
-            fcntl.fcntl(fd, fcntl.F_NOCACHE, 1)
+            fcntl.fcntl(fd, fcntl.F_NOCACHE, 1)  # don't thrash page cache
         except Exception:
             pass
         f.write(data); f.flush(); os.fsync(fd)
     os.replace(tmp, path)
+
+def _b36(n):
+    if n == 0: return "0"
+    a = "0123456789abcdefghijklmnopqrstuvwxyz"; s = []
+    while n:
+        n, r = divmod(n, 36); s.append(a[r])
+    return "".join(reversed(s))
 
 def _write_state(state):
     tmp = STATE_PATH + ".tmp"
@@ -110,26 +100,27 @@ def _read_state():
     with open(STATE_PATH, "r") as f:
         return json.load(f)
 
-def _save_pid_and_session(pid, dest_root, session_id, start_wall_ns):
+def _save_pid(pid, dest_root):
     state = _read_state() or {}
     recent = state.get("recent", [])
     if len(recent) > RECENT_KEEP:
         recent = recent[-RECENT_KEEP:]
         state["recent"] = recent
-    state.update({
-        "pid": pid,
-        "dest_root": dest_root,
-        "session_id": session_id,
-        "start_wall_ns": start_wall_ns
-    })
+    state.update({"pid": pid, "dest_root": dest_root})
     _write_state(state)
     with open(PID_PATH, "w") as f:
         f.write(str(pid))
 
-def _append_recent(record):
-    """record: {'path','key','t_ns','sid'}"""
+def _append_recent(rec_or_path):
+    # Store as {'path','key','t_ns'}; accept legacy string too
+    if isinstance(rec_or_path, str):
+        record = {"path": rec_or_path, "key": None, "t_ns": 0}
+    else:
+        record = rec_or_path
+
     with REC_LOCK:
         RECENT_LOCAL.append(record)
+
     state = _read_state() or {}
     lst = state.get("recent", [])
     lst.append(record)
@@ -154,34 +145,26 @@ def _alive(pid):
     except Exception:
         return False
 
-# ---------- Core saving ----------
 def _saver():
+    # Writes always into the folder for the day of t_ns (handles midnight rollover + cross-run consistency)
     while not STOP.is_set():
         try:
             frame, keyname, t_ns = Q.get(timeout=0.1)
         except queue.Empty:
             continue
-
         ok, buf = cv2.imencode(".jpg", frame, ENC_PARAMS)
-        if not ok:
-            Q.task_done()
-            continue
-
-        # Build dest dir and a collision-proof filename
-        dest_dir = _dest_dir_for_ns(t_ns)
-        uid = f"{_b36(t_ns)}-{os.getpid()}-{next(_SEQ)}"   # time + pid + per-proc seq
-        out = os.path.join(dest_dir, f"{keyname}_{uid}.jpg")
-
-        try:
-            _fast_write(out, buf.tobytes())                # atomic write
-            _append_recent({"path": out, "key": keyname, "t_ns": t_ns, "sid": SESSION_ID})
-        except Exception:
-            pass
-
+        if ok:
+            dest_dir = _dest_dir_for_ns(t_ns)  # <-- choose day folder at save-time
+            out = os.path.join(dest_dir, f"{keyname}_{_b36(t_ns)}.jpg")
+            try:
+                _fast_write(out, buf.tobytes())
+                _append_recent({"path": out, "key": keyname, "t_ns": t_ns})
+            except Exception:
+                pass
         Q.task_done()
 
-
 def _enqueue_capture(keyname):
+    # Grab latest frame and enqueue for save, labeled with keyname
     try:
         frame_bgr, _ = get_frame_bgr_from_ring(path=RING_PATH, wait_new=False, timeout_s=0.0)
         frame = frame_bgr.copy(order="C")  # detach immediately
@@ -195,14 +178,17 @@ def _enqueue_capture(keyname):
     except Exception:
         pass
 
-# ---------- NM / purge helpers ----------
+def _on_term(signum, frame):
+    STOP.set()
+
 def _maybe_delete_recent_nm(now_ns, window_s=NM_DELETE_WINDOW_S):
+    # If an NM image was saved within the last window_s seconds, delete the most recent one
     window_ns = int(window_s * 1e9)
     with REC_LOCK:
         for rec in reversed(RECENT_LOCAL):
-            path = rec.get("path")
-            key  = rec.get("key")
-            t_ns = rec.get("t_ns", 0)
+            path = rec.get("path") if isinstance(rec, dict) else rec
+            key  = rec.get("key")  if isinstance(rec, dict) else None
+            t_ns = rec.get("t_ns", 0) if isinstance(rec, dict) else 0
             if key == "nm" and path and now_ns - t_ns <= window_ns:
                 try:
                     if os.path.exists(path):
@@ -210,15 +196,18 @@ def _maybe_delete_recent_nm(now_ns, window_s=NM_DELETE_WINDOW_S):
                         print(f"[arrow-saver] Deleted recent NM ({path}) within {window_s:.2f}s window")
                 except Exception:
                     pass
+                # remove from memory
                 try:
                     RECENT_LOCAL.remove(rec)
                 except ValueError:
                     pass
+                # remove from state
                 state = _read_state() or {}
                 lst = state.get("recent", [])
                 for i in range(len(lst) - 1, -1, -1):
                     item = lst[i]
-                    if isinstance(item, dict) and item.get("path") == path:
+                    item_path = item.get("path") if isinstance(item, dict) else item
+                    if item_path == path:
                         del lst[i]
                         break
                 state["recent"] = lst
@@ -226,6 +215,7 @@ def _maybe_delete_recent_nm(now_ns, window_s=NM_DELETE_WINDOW_S):
                 break
 
 def _delete_recent_images(window_s, now_ns=None):
+    # Delete ALL images (any key) saved within the last window_s seconds
     if now_ns is None:
         now_ns = time.time_ns()
     cutoff = now_ns - int(window_s * 1e9)
@@ -233,9 +223,10 @@ def _delete_recent_images(window_s, now_ns=None):
 
     with REC_LOCK:
         for rec in list(RECENT_LOCAL):
-            t_ns = rec.get("t_ns", 0)
-            if t_ns >= cutoff:
-                to_delete.append(rec)
+            if isinstance(rec, dict):
+                t_ns = rec.get("t_ns", 0)
+                if t_ns >= cutoff:
+                    to_delete.append(rec)
 
         paths_set = set()
         for rec in to_delete:
@@ -251,7 +242,9 @@ def _delete_recent_images(window_s, now_ns=None):
         lst = state.get("recent", [])
         filtered = []
         for item in lst:
-            if isinstance(item, dict) and item.get("path") in paths_set and item.get("t_ns", 0) >= cutoff:
+            item_path = item.get("path") if isinstance(item, dict) else item
+            item_t = item.get("t_ns", 0) if isinstance(item, dict) else 0
+            if item_t >= cutoff and item_path in paths_set:
                 continue
             filtered.append(item)
         state["recent"] = filtered
@@ -260,50 +253,22 @@ def _delete_recent_images(window_s, now_ns=None):
     for rec in to_delete:
         p = rec.get("path")
         if p and os.path.exists(p):
-            try: os.remove(p)
-            except Exception: pass
+            try:
+                os.remove(p)
+            except Exception:
+                pass
     if to_delete:
         print(f"[arrow-saver] Deleted {len(to_delete)} file(s) from the last {window_s:.1f}s due to idle auto-press")
 
-# ---------- Short-run scrub ----------
-def _scrub_entire_session(session_id):
-    """Delete every file created by this session (by 'sid')."""
-    state = _read_state() or {}
-    lst = state.get("recent", [])
-    targets = [item for item in lst if isinstance(item, dict) and item.get("sid") == session_id]
-    paths = [it.get("path") for it in targets if it.get("path")]
-    # Remove from disk
-    n = 0
-    for p in paths:
-        if p and os.path.exists(p):
-            try:
-                os.remove(p)
-                n += 1
-            except Exception:
-                pass
-    # Remove from in-memory recent and state
-    with REC_LOCK:
-        for rec in list(RECENT_LOCAL):
-            if rec.get("sid") == session_id:
-                try:
-                    RECENT_LOCAL.remove(rec)
-                except ValueError:
-                    pass
-    state["recent"] = [it for it in lst if not (isinstance(it, dict) and it.get("sid") == session_id)]
-    _write_state(state)
-    print(f"[arrow-saver] Short-run scrub: deleted {n} file(s) for session {session_id}")
+ARROWS = {
+    keyboard.Key.up: "up",
+    keyboard.Key.down: "down",
+    keyboard.Key.left: "left",
+    keyboard.Key.right: "right",
+}
 
-def _maybe_scrub_short_run_at_exit():
-    """Called when the 'start' process is exiting (ESC/CTRL-C)."""
-    try:
-        runtime_s = (time.monotonic_ns() - START_MONO_NS) / 1e9
-    except Exception:
-        return
-    if runtime_s < BAD_RUN_SCRUB_S:
-        _scrub_entire_session(SESSION_ID)
-
-# ---------- Threads ----------
 def _nm_ticker():
+    # When idle (no arrow) for NM_PERIOD_S, capture 'nm' every NM_PERIOD_S until an arrow arrives
     global NEXT_NM_DUE_MONO_NS
     period_ns = int(NM_PERIOD_S * 1e9)
     while not STOP.is_set():
@@ -311,9 +276,10 @@ def _nm_ticker():
         if now >= NEXT_NM_DUE_MONO_NS:
             _enqueue_capture("nm")
             NEXT_NM_DUE_MONO_NS = now + period_ns
-        time.sleep(0.02)
+        time.sleep(0.02)  # ~50Hz check
 
 def _idle_watchdog():
+    # If no arrow pressed for IDLE_AUTOPRESS_S, purge last window and auto-press RIGHT once
     global LAST_PRESS_MONO_NS, NEXT_NM_DUE_MONO_NS, NEXT_IDLE_AUTOPRESS_DUE_MONO_NS
     period_nm_ns = int(NM_PERIOD_S * 1e9)
     autopress_ns = int(IDLE_AUTOPRESS_S * 1e9)
@@ -326,10 +292,6 @@ def _idle_watchdog():
             NEXT_NM_DUE_MONO_NS = now_mono + period_nm_ns
             NEXT_IDLE_AUTOPRESS_DUE_MONO_NS = now_mono + autopress_ns
         time.sleep(0.05)
-
-# ---------- Listener / lifecycle ----------
-def _on_term(signum, frame):
-    STOP.set()
 
 def _listener_loop():
     # Warm JPEG encoder so first keypress is instant.
@@ -347,13 +309,7 @@ def _listener_loop():
 
     def on_press(key):
         global LAST_PRESS_MONO_NS, NEXT_NM_DUE_MONO_NS, NEXT_IDLE_AUTOPRESS_DUE_MONO_NS
-        keymap = {
-            keyboard.Key.up: "up",
-            keyboard.Key.down: "down",
-            keyboard.Key.left: "left",
-            keyboard.Key.right: "right",
-        }
-        keyname = keymap.get(key)
+        keyname = ARROWS.get(key)
         if keyname:
             _maybe_delete_recent_nm(time.time_ns(), NM_DELETE_WINDOW_S)
             now_mono = time.monotonic_ns()
@@ -373,53 +329,33 @@ def _listener_loop():
             L.stop()
         except Exception:
             pass
-    # if we’re exiting (ESC/CTRL-C), check short-run scrub here too
-    _maybe_scrub_short_run_at_exit()
 
-# ---------- Commands ----------
 def cmd_start():
-    global DEST_ROOT, SESSION_ID, START_WALL_NS, START_MONO_NS
+    global DEST_ROOT
     pid = _get_pid()
     if _alive(pid):
         print(f"[arrow-saver] Already running (pid={pid}).")
         return
     DEST_ROOT = _prepare_dest_root()
-    SESSION_ID = _make_session_id()
-    START_WALL_NS = time.time_ns()
-    START_MONO_NS = time.monotonic_ns()
-    _save_pid_and_session(os.getpid(), DEST_ROOT, SESSION_ID, START_WALL_NS)
+    _save_pid(os.getpid(), DEST_ROOT)
     _listener_loop()
 
 def cmd_shutdown():
     state = _read_state() or {}
-    start_wall_ns = state.get("start_wall_ns")
-    session_id = state.get("session_id")
-    short_run_scrubbed = False
-
-    # If we have a start time, evaluate total runtime and scrub the session if too short
-    if start_wall_ns:
-        runtime_s = (time.time_ns() - int(start_wall_ns)) / 1e9
-        if runtime_s < BAD_RUN_SCRUB_S and session_id:
-            _scrub_entire_session(session_id)
-            short_run_scrubbed = True
-
-    # If not a short run (or no start time), do the usual "delete last 6" cleanup
-    if not short_run_scrubbed:
-        recent = list(state.get("recent", []))
-        for item in list(reversed(recent))[:6]:
-            path = item.get("path") if isinstance(item, dict) else item
-            try:
-                if path and os.path.exists(path):
-                    os.remove(path)
-                    print(f"[arrow-saver] Deleted {path}")
-            except Exception as e:
-                print(f"[arrow-saver] Could not delete {path}: {e}")
-
-    # Signal the running listener to stop
-    pid = state.get("pid") or _get_pid()
-    if pid and _alive(int(pid)):
+    recent = list(state.get("recent", []))
+    for item in list(reversed(recent))[:6]:
+        path = item.get("path") if isinstance(item, dict) else item
         try:
-            os.kill(int(pid), signal.SIGTERM)
+            if path and os.path.exists(path):
+                os.remove(path)
+                print(f"[arrow-saver] Deleted {path}")
+        except Exception as e:
+            print(f"[arrow-saver] Could not delete {path}: {e}")
+
+    pid = _get_pid()
+    if _alive(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
             print(f"[arrow-saver] Sent SIGTERM to pid={pid}")
         except Exception as e:
             print(f"[arrow-saver] Kill failed: {e}")
@@ -430,7 +366,7 @@ def run(argv=None):
     ap = argparse.ArgumentParser(prog="arrow_save_to_transcend", add_help=True)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("start", help="Start the arrow key frame saver")
-    sub.add_parser("shutdown", help="Delete last 6 images or scrub session if runtime < threshold, then stop")
+    sub.add_parser("shutdown", help="Delete last 6 images saved and stop the saver")
     args = ap.parse_args(argv)
 
     if args.cmd == "start":

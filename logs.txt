@@ -26,9 +26,8 @@ runv7.py : Ground logic improved across the board, top logic scanners instated a
 runv8.py : QOL 
 runv9.py : Top logic fixed, pillar logic fixed, few discrepencies left 
 runv10.py : frame save funnel to flash drive -> collate dataset
-runv11.py : afk for frame stacking, few bugs in logic (tunneling) left to fix
-runv12.py : adressing tunnel bugs + independant startup logic 
-
+runv11.py : afk for frame stacking, few bugs in logic (tunneling) left to fix + independant startup logic (PRIMED) (intentional exclusion of pillar ability)
+runv12.py : (OPTIMAL) + pillar muting - smarter frame saves
 
 scgrab (DEBUG)
 killall scgrab 2>/dev/null || true
@@ -554,3 +553,6 @@ Tunnel logic is broken
 hypergreen ramps logic -:> distance thing? maybe gets converted to a red tri
 
 Everything else is primed for data funneling = collection 
+
+1/10/25
+If left right or right left within 0.7secs of eachother then remvoe both 

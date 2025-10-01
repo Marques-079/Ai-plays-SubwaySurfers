@@ -7,11 +7,12 @@ DO_WE_WANT_CALLOUTS = True #Audio queues on moves
 if DO_WE_WANT_CALLOUTS:
     import subprocess, sys; ANN_PROC = subprocess.Popen([sys.executable, "/Users/marcus/Documents/GitHub/Ai-plays-SubwaySurfers/alpha/announcer.py"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-import subprocess, shlex; scgrab_proc = subprocess.Popen(shlex.split("./scgrab --x 644 --y 77 --w 505 --h 906 --fps 60 --out /tmp/scap.ring --slots 3 --scale 2"), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+import subprocess, shlex; scgrab_proc = subprocess.Popen(shlex.split("./scgrab --x 644 --y 78 --w 506 --h 906 --fps 60 --out /tmp/scap.ring --slots 3 --scale 2"), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
 import os, sys, argparse, builtins, warnings, subprocess, time
 BASE = "/Users/marcus/Documents/GitHub/Ai-plays-SubwaySurfers/alpha/arrow_save_to_transcend.py"
 proc = subprocess.Popen([sys.executable, BASE, "start"])
+
 
 _mute_parser = argparse.ArgumentParser(add_help=False)
 _mute_parser.add_argument("--quiet",  action="store_true",
@@ -22,6 +23,22 @@ _mute_args, _ = _mute_parser.parse_known_args()
 
 SILENT_MODE = bool(_mute_args.silent)
 QUIET_MODE  = bool(_mute_args.quiet or _mute_args.silent)
+
+# ---- Single-tap mute window (for pillar aftermath) ----
+try:
+    SINGLE_TAP_MUTE_UNTIL
+except NameError:
+    SINGLE_TAP_MUTE_UNTIL = 0.0  # monotonic seconds
+
+def _singles_muted() -> bool:
+    return time.monotonic() < SINGLE_TAP_MUTE_UNTIL
+
+def _suppress_singles_for(sec: float = 2.0):
+    """Block single lane taps for `sec` seconds."""
+    global SINGLE_TAP_MUTE_UNTIL
+    SINGLE_TAP_MUTE_UNTIL = time.monotonic() + float(sec)
+    print("════════════════ [PILLAR-MUTE] single-tap lane moves DISABLED for "
+          f"{sec:.2f}s ════════════════")
 
 
 def _redirect_to_devnull():
@@ -577,6 +594,9 @@ def _double_sidestep(from_pillar: bool = True) -> bool:
     """
     global lane, last_move_ts, _synth_block_until, REENTRY_BAN
 
+    # NEW: block singles immediately for 2s; double taps in this function still fire.
+    _suppress_singles_for(2.0)
+
     if not MOVEMENT_ENABLED:
         return False
 
@@ -602,21 +622,18 @@ def _double_sidestep(from_pillar: bool = True) -> bool:
         print("[PILLAR EVADE] LEFT, LEFT → lane=0")
         time.sleep(0.1)
     else:
-        #Single right tap to get out of middle 50/50 we bank safe 
         _tap('right'); lane = 2
         print("[PILLAR EVADE] MID → RIGHT → lane=2")
         time.sleep(0.1)
 
     last_move_ts = now
-
     if from_pillar:
-        # ensure any existing re-entry ban can’t block the immediate follow-up
         REENTRY_BAN.update(lane=None, counter=0, last_intent_dir=None,
                            last_intent_frame=None, expiry_frame=None)
     else:
         _register_red_evasion_ban(prev_lane)
-
     return True
+
 
 #======================================================================================================================================================================================
 
@@ -744,7 +761,7 @@ SIDE_MID_FLIP_DIST_PX = 1500.0 #EXPLODE NUMBER orig 15 so that we dont convert o
 # Crop + click (set by ad layout)
 advertisement = True
 if advertisement:
-    snap_coords = (644, 77, (1149-644), (981-75))  # (left, top, width, height)
+    snap_coords = (644, 78, (1149-643), (982-78))  # (left, top, width, height)
     start_click = (1030, 900)
 else:
     snap_coords = (483, 75, (988-483), (981-75))
@@ -752,7 +769,7 @@ else:
 
 RAIL_ID    = 9
 IMG_SIZE   = 512
-CONF, IOU  = 0.30, 0.45
+CONF, IOU  = 0.30, 0.45 
 MAX_DET    = 30
 
 # Color/region filter
@@ -1182,7 +1199,7 @@ def percent_of_color_rgba(img, rgba=(210, 36, 35, 255), tol_frac=0.05):
 LOWBARRIER1_ID   = 4
 ORANGETRAIN_ID   = 6
 WALL_STRIP_PX    = 14          # vertical strip height checked just above the barrier
-WALL_MATCH_FRAC  = 0.135       # % of “wall” pixels required to relabel
+WALL_MATCH_FRAC  = 0.148      # % of “wall” pixels required to relabel 0.135 OLD
 WALL_ORANGE_LO = np.array([5,  80,  60], dtype=np.uint8)   # H,S,V (lo)
 WALL_ORANGE_HI = np.array([35, 255, 255], dtype=np.uint8)  # H,S,V (hi)
 
@@ -1414,6 +1431,11 @@ def _pick_best_safe_triangle(cands, jx: int):
 def _issue_move_towards_x(jx: int, tx: int, *, sidewalk_present: bool = False):
     global lane, last_move_ts, _synth_block_until
     if not MOVEMENT_ENABLED:
+        return
+
+    # NEW: block single-tap lane moves while pillar mute is active
+    if _singles_muted():
+        print("[PILLAR-MUTE] vetoed single-tap lane move (cooldown active)")
         return
 
     now = time.perf_counter()
