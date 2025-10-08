@@ -13,7 +13,7 @@ from ring_grab import get_frame_bgr_from_ring  # returns (frame_bgr, meta)
 import itertools
 _SEQ = itertools.count()
 
-time.sleep(9.0)  # wait for boot processes
+time.sleep(7.0)  # wait for boot processes
 
 # ------------ Config (tweak if needed) --------------
 RING_PATH   = "/tmp/scap.ring"
@@ -40,8 +40,6 @@ CANCEL_PAIR_WINDOW_S = 0.75
 # Double-tap window: same-direction (left-left / right-right) becomes dl/dr
 DOUBLE_TAP_WINDOW_S = 0.07
 
-# --- add near other config values ---
-SHUTDOWN_DELETE_WINDOW_S = 8.0   # <-- N seconds you want to delete on shutdown
 
 # ----------------------------------------------------
 
@@ -64,46 +62,6 @@ SESSION_ID = None
 DEST_ROOT = None  # Transcend root
 
 # ---------- Helpers ----------
-
-# --- add this helper (put it near other delete helpers) ---
-def _delete_recent_images_from_state(window_s: float, now_ns: int | None = None):
-    """
-    Delete all images whose saved timestamp t_ns is within the last `window_s` seconds.
-    Works when called from a separate process because it uses the persisted state.
-    """
-    if now_ns is None:
-        now_ns = time.time_ns()
-    cutoff = now_ns - int(window_s * 1e9)
-
-    state = _read_state() or {}
-    lst = state.get("recent", [])
-
-    keep = []
-    paths_to_delete = []
-
-    for item in lst:
-        if isinstance(item, dict) and int(item.get("t_ns", 0)) >= cutoff:
-            p = item.get("path")
-            if p:
-                paths_to_delete.append(p)
-        else:
-            keep.append(item)
-
-    # Delete files from disk (dedupe in case of duplicates)
-    deleted = 0
-    for p in set(paths_to_delete):
-        try:
-            if os.path.exists(p):
-                os.remove(p)
-                deleted += 1
-        except Exception:
-            pass
-
-    # Persist updated state
-    state["recent"] = keep
-    _write_state(state)
-
-    print(f"[arrow-saver] Deleted {deleted} file(s) from the last {window_s:.2f}s")
 
 
 def _maybe_delete_cancel_pair(window_s=CANCEL_PAIR_WINDOW_S):
@@ -578,24 +536,32 @@ def cmd_start():
     _save_pid_and_session(os.getpid(), DEST_ROOT, SESSION_ID, START_WALL_NS)
     _listener_loop()
 
-def cmd_shutdown(window_s: float | None = None):
-    if window_s is None:
-        window_s = SHUTDOWN_DELETE_WINDOW_S
-
+def cmd_shutdown():
     state = _read_state() or {}
     start_wall_ns = state.get("start_wall_ns")
     session_id = state.get("session_id")
     short_run_scrubbed = False
 
+    # If we have a start time, evaluate total runtime and scrub the session if too short
     if start_wall_ns:
         runtime_s = (time.time_ns() - int(start_wall_ns)) / 1e9
         if runtime_s < BAD_RUN_SCRUB_S and session_id:
             _scrub_entire_session(session_id)
             short_run_scrubbed = True
 
+    # If not a short run (or no start time), do the usual "delete last 6" cleanup
     if not short_run_scrubbed:
-        _delete_recent_images_from_state(window_s, now_ns=time.time_ns())
+        recent = list(state.get("recent", []))
+        for item in list(reversed(recent))[:6]:
+            path = item.get("path") if isinstance(item, dict) else item
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+                    print(f"[arrow-saver] Deleted {path}")
+            except Exception as e:
+                print(f"[arrow-saver] Could not delete {path}: {e}")
 
+    # Signal the running listener to stop
     pid = state.get("pid") or _get_pid()
     if pid and _alive(int(pid)):
         try:
@@ -606,25 +572,17 @@ def cmd_shutdown(window_s: float | None = None):
     try: os.remove(PID_PATH)
     except Exception: pass
 
-
-
 def run(argv=None):
-    global SHUTDOWN_DELETE_WINDOW_S     # put this first, before any use
     ap = argparse.ArgumentParser(prog="arrow_save_to_transcend", add_help=True)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("start", help="Start the arrow key frame saver")
-    psh = sub.add_parser("shutdown", help="Delete frames from a recent time window, then stop")
-    psh.add_argument("--window", type=float, default=SHUTDOWN_DELETE_WINDOW_S,
-                     help="Seconds back from now to delete (default: %(default)s)")
+    sub.add_parser("shutdown", help="Delete last 6 images or scrub session if runtime < threshold, then stop")
     args = ap.parse_args(argv)
 
     if args.cmd == "start":
         cmd_start()
-    else:
-        SHUTDOWN_DELETE_WINDOW_S = float(args.window)
+    elif args.cmd == "shutdown":
         cmd_shutdown()
-
-
 
 if __name__ == "__main__":
     run()

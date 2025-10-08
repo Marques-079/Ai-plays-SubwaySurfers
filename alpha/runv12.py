@@ -2,7 +2,7 @@ import atexit, subprocess
 atexit.register(lambda: subprocess.run("killall scgrab 2>/dev/null || true", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
 
 
-DO_WE_WANT_CALLOUTS = True #Audio queues on moves 
+DO_WE_WANT_CALLOUTS = False #Audio queues on moves 
 
 if DO_WE_WANT_CALLOUTS:
     import subprocess, sys; ANN_PROC = subprocess.Popen([sys.executable, "/Users/marcus/Documents/GitHub/Ai-plays-SubwaySurfers/alpha/announcer.py"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -616,15 +616,18 @@ def _double_sidestep(from_pillar: bool = True) -> bool:
     if lane == 0:
         _tap('right'); _tap('right'); lane = 2
         print("[PILLAR EVADE] RIGHT, RIGHT → lane=2")
-        time.sleep(0.1)
+
+        time.sleep(0.75)
     elif lane == 2:
         _tap('left'); _tap('left'); lane = 0
         print("[PILLAR EVADE] LEFT, LEFT → lane=0")
-        time.sleep(0.1)
+
+        time.sleep(0.75)
     else:
         _tap('right'); lane = 2
         print("[PILLAR EVADE] MID → RIGHT → lane=2")
-        time.sleep(0.1)
+
+        time.sleep(0.75)
 
     last_move_ts = now
     if from_pillar:
@@ -762,10 +765,10 @@ SIDE_MID_FLIP_DIST_PX = 1500.0 #EXPLODE NUMBER orig 15 so that we dont convert o
 advertisement = True
 if advertisement:
     snap_coords = (644, 77, (1149-644), (981-75))  # (left, top, width, height)
-    start_click = (1030, 900)
+    start_click = (1060, 900)
 else:
     snap_coords = (483, 75, (988-483), (981-75))
-    start_click = (870, 895)
+    start_click = (880, 895)
 
 RAIL_ID    = 9
 IMG_SIZE   = 512
@@ -1199,7 +1202,7 @@ def percent_of_color_rgba(img, rgba=(210, 36, 35, 255), tol_frac=0.05):
 LOWBARRIER1_ID   = 4
 ORANGETRAIN_ID   = 6
 WALL_STRIP_PX    = 14          # vertical strip height checked just above the barrier
-WALL_MATCH_FRAC  = 0.148      # % of “wall” pixels required to relabel 0.135 OLD
+WALL_MATCH_FRAC  = 0.25     # % of “wall” pixels required to relabel 0.135 OLD 0.148 LESS OLD 
 WALL_ORANGE_LO = np.array([5,  80,  60], dtype=np.uint8)   # H,S,V (lo)
 WALL_ORANGE_HI = np.array([35, 255, 255], dtype=np.uint8)  # H,S,V (hi)
 
@@ -1767,6 +1770,13 @@ except Exception:
     pass
 
 try:
+    pyautogui.moveTo(895, 235)
+    pyautogui.click()
+
+    time.sleep (2.0)
+
+    pyautogui.click(895, 235)
+    
     pyautogui.click(start_click)
 except Exception:
     pass
