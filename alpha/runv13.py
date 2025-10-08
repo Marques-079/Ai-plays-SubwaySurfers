@@ -2892,6 +2892,7 @@ while running:
     kill_by_lgw = (lgw_pct >= 40.0)
 
     if kill_by_pixel or kill_by_lgw and frame_idx > 15:
+        subprocess.run([sys.executable, BASE, "shutdown"], check=False)
         print(f"Kill-switch triggered at ({CHECK_X},{CHECK_Y})"
             + (" [LGW]" if kill_by_lgw else ""))
         running = False
@@ -3081,7 +3082,6 @@ while running:
         print(f"Time taken for logic TL is {elapsed_TL * 1000:.2f} ms")
         continue
     
-subprocess.run([sys.executable, BASE, "shutdown"], check=False)
 
 import atexit, subprocess
 atexit.register(lambda: subprocess.run("killall scgrab 2>/dev/null || true", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))

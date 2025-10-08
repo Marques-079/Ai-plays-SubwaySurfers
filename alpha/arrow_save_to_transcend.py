@@ -41,7 +41,7 @@ CANCEL_PAIR_WINDOW_S = 0.75
 DOUBLE_TAP_WINDOW_S = 0.07
 
 # --- add near other config values ---
-SHUTDOWN_DELETE_WINDOW_S = 8.0   # <-- N seconds you want to delete on shutdown
+SHUTDOWN_DELETE_WINDOW_S = 7.0   # <-- N seconds you want to delete on shutdown
 
 # ----------------------------------------------------
 
