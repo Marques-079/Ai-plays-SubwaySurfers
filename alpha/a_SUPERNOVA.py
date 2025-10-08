@@ -2,7 +2,7 @@ import os, sys, time, subprocess
 
 ALPHA_DIR   = os.path.dirname(os.path.abspath(__file__)) 
 REPO_ROOT   = os.path.dirname(ALPHA_DIR)                    
-CMD         = [sys.executable, "alpha/runv13.py"]          
+CMD         = [sys.executable, "alpha/runv14.py"]          
 SLEEP_SECONDS = 2.0
 
 def main():
@@ -22,3 +22,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+#710, 610

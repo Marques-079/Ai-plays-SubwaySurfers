@@ -24,6 +24,16 @@ _mute_args, _ = _mute_parser.parse_known_args()
 SILENT_MODE = bool(_mute_args.silent)
 QUIET_MODE  = bool(_mute_args.quiet or _mute_args.silent)
 
+# --- Yellow stuck → clear loop (init) ---
+YCHK_X, YCHK_Y = 380, 900
+Y_TOL = 38  # 25% of 255 ≈ 64
+# RGBA(255,247,136,255) as BGRA for mss.grab()
+Y_TARGET_BGRA = (136, 247, 255, 255)
+
+YELLOW_STREAK = 0
+YELLOW_CLEAR_ARMED = False
+
+
 # ---- Single-tap mute window (for pillar aftermath) ----
 try:
     SINGLE_TAP_MUTE_UNTIL
@@ -2863,6 +2873,48 @@ while running:
     #print(f"[view] shape: {frame_bgr.shape[1]}x{frame_bgr.shape[0]} px   (BGR)   seq={meta['seq']}")
 
     # --- ABSOLUTE SCREEN pixel check ---
+
+    #Unobxin chckers
+    arr_y = np.array(sct.grab({"left": YCHK_X, "top": YCHK_Y, "width": 1, "height": 1}))
+    b, g, r, a = arr_y[0, 0]
+    is_yellow = (
+        abs(b - Y_TARGET_BGRA[0]) <= Y_TOL and
+        abs(g - Y_TARGET_BGRA[1]) <= Y_TOL and
+        abs(r - Y_TARGET_BGRA[2]) <= Y_TOL and
+        abs(a - Y_TARGET_BGRA[3]) <= Y_TOL
+    )
+
+    YELLOW_STREAK = (YELLOW_STREAK + 1) if is_yellow else 0
+    if not YELLOW_CLEAR_ARMED and YELLOW_STREAK >= 10:
+        YELLOW_CLEAR_ARMED = True
+        print("[CLEAR] Yellow pixel stuck ≥15 frames — entering clear loop")
+
+    # If armed, block here and keep clearing until pixel no longer matches
+    if YELLOW_CLEAR_ARMED:
+        while True:
+            try:        
+                pyautogui.moveTo(895, 235)
+                pyautogui.click()
+                time.sleep(2.5)
+                pyautogui.click(895, 235)
+            except Exception:
+                pass
+
+            # Re-check pixel after the clicks
+            arr_y = np.array(sct.grab({"left": YCHK_X, "top": YCHK_Y, "width": 1, "height": 1}))
+            b, g, r, a = arr_y[0, 0]
+            is_yellow = (
+                abs(b - Y_TARGET_BGRA[0]) <= Y_TOL and
+                abs(g - Y_TARGET_BGRA[1]) <= Y_TOL and
+                abs(r - Y_TARGET_BGRA[2]) <= Y_TOL and
+                abs(a - Y_TARGET_BGRA[3]) <= Y_TOL
+            )
+            if not is_yellow:
+                print("[CLEAR] Pixel cleared — resuming main loop")
+                YELLOW_CLEAR_ARMED = False
+                YELLOW_STREAK = 0
+                break
+
     t0_check = time.perf_counter()
     arr = np.array(sct.grab({"left": CHECK_X, "top": CHECK_Y, "width": 1, "height": 1}))
     b, g, r, a = arr[0, 0]
@@ -2884,7 +2936,7 @@ while running:
     # NEW condition: >40% light grey/white
     kill_by_lgw = (lgw_pct >= 40.0)
 
-    if kill_by_pixel or kill_by_lgw and frame_idx > 15:
+    if kill_by_pixel or kill_by_lgw and frame_idx > 25:
         subprocess.run([sys.executable, BASE, "shutdown"], check=False)
         print(f"Kill-switch triggered at ({CHECK_X},{CHECK_Y})"
             + (" [LGW]" if kill_by_lgw else ""))
