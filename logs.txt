@@ -28,6 +28,8 @@ runv9.py : Top logic fixed, pillar logic fixed, few discrepencies left
 runv10.py : frame save funnel to flash drive -> collate dataset
 runv11.py : afk for frame stacking, few bugs in logic (tunneling) left to fix + independant startup logic (PRIMED) (intentional exclusion of pillar ability)
 runv12.py : (OPTIMAL) + pillar muting - smarter frame saves
+runv13.py :slight tuning and optimisations 
+runv14,py : final run yeilds very well upwards of 50K in some runs
 
 scgrab (DEBUG)
 killall scgrab 2>/dev/null || true
