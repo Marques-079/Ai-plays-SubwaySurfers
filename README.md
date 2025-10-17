@@ -1,3 +1,5 @@
+# HIGHSCORE 100k - will update the logs shortly...
+
 # CURRENTLY IN PROGRESS (ETC: Before next year 🥴)
 
 # Subway Surfers vs AI 🚃 🚃🏃‍♂️ (🚧)
