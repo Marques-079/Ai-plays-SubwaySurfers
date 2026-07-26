@@ -177,20 +177,4 @@ This led to an 83% time save for the frame analysis loop
 
 The back bone of this Algorithm put VERY simply is, knowing what lane you are in + on ground of ontop of trains (diff logic applied) -> Upcoming obstacle? Set evasive timer -> Move **
 
----
 
-# CNN and Transformer training 🚗🔄🤖
-
-🚧 (Project in progress) 🚧
-
----
-
-# Proximal Policy Optimisation  🤓
-
-🚧 (Project in progress) 🚧
-
----
-
-# Terminus.
-
-🚧 (Project in progress) 🚧
